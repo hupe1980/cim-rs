@@ -97,13 +97,26 @@ pub struct DifferenceModel {
 pub struct Statement {
     /// mRID of the object the statement is about.
     pub subject: Mrid,
-    /// Class named on the statement's `rdf:Description`, when given.
-    pub class: Option<String>,
+    /// Class named on the statement group's element.
+    ///
+    /// A difference names its subject either with a bare `rdf:Description` — in which
+    /// case this is `None` — or with the class element itself. The latter carries real
+    /// information: a difference may *reclassify* an object, and the published CGMES
+    /// conformity tests do exactly that, replacing a `LinearShuntCompensator` with a
+    /// `NonlinearShuntCompensator` under the same identifier.
+    pub class: Option<QualifiedName>,
     /// Namespace IRI of the predicate.
     pub predicate_ns: String,
     /// Qualified predicate name, e.g. `TapChangerTablePoint.x`.
     pub predicate: String,
     pub value: StatementValue,
+}
+
+/// A namespace-qualified name as it appeared in a document.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QualifiedName {
+    pub ns: String,
+    pub local: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]

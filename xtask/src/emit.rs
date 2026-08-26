@@ -11,54 +11,43 @@ use std::path::Path;
 
 use crate::ir::{AttrKind, Class, Multiplicity, Name, Primitive, Schema};
 
-pub fn emit(schema: &Schema, out_dir: &Path, check: bool) -> Result<()> {
-    let vintage_dir = out_dir.join(&schema.vintage);
-    let files: Vec<(String, String)> = vec![
-        ("mod.rs".to_owned(), emit_mod(schema)),
-        ("tables.rs".to_owned(), emit_tables(schema)?),
-        ("names.rs".to_owned(), emit_names(schema)),
-        ("views.rs".to_owned(), emit_views(schema)),
-    ]
-    .into_iter()
-    .map(|(name, src)| (name, rustfmt(&src)))
-    .collect();
+pub fn emit(schemas: &[Schema], out_dir: &Path, check: bool) -> Result<()> {
+    let mut planned: Vec<(std::path::PathBuf, String)> = Vec::new();
+    for schema in schemas {
+        let dir = out_dir.join(&schema.vintage);
+        planned.push((dir.join("mod.rs"), rustfmt(&emit_mod(schema))));
+        planned.push((dir.join("tables.rs"), rustfmt(&emit_tables(schema)?)));
+        planned.push((dir.join("names.rs"), rustfmt(&emit_names(schema))));
+        planned.push((dir.join("views.rs"), rustfmt(&emit_views(schema))));
+    }
+    planned.push((out_dir.join("mod.rs"), rustfmt(&emit_root(schemas))));
 
     if check {
-        let mut stale = Vec::new();
-        for (name, content) in &files {
-            let path = vintage_dir.join(name);
-            let current = std::fs::read_to_string(&path).unwrap_or_default();
-            if normalize(&current) != normalize(content) {
-                stale.push(path.display().to_string());
-            }
-        }
-        let root = out_dir.join("mod.rs");
-        let expected_root = rustfmt(&emit_root(schema));
-        if normalize(&std::fs::read_to_string(&root).unwrap_or_default())
-            != normalize(&expected_root)
-        {
-            stale.push(root.display().to_string());
-        }
+        let stale: Vec<String> = planned
+            .iter()
+            .filter(|(path, content)| {
+                let current = std::fs::read_to_string(path).unwrap_or_default();
+                normalize(&current) != normalize(content)
+            })
+            .map(|(path, _)| path.display().to_string())
+            .collect();
         if !stale.is_empty() {
             bail!(
                 "generated sources are stale:\n  {}\nRun `cargo xtask codegen`.",
                 stale.join("\n  ")
             );
         }
-        println!("generated sources are up to date");
+        println!("generated sources are up to date ({} files)", planned.len());
         return Ok(());
     }
 
-    std::fs::create_dir_all(&vintage_dir)
-        .with_context(|| format!("creating {}", vintage_dir.display()))?;
-    for (name, content) in &files {
-        let path = vintage_dir.join(name);
-        std::fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
+    for (path, content) in &planned {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        }
+        std::fs::write(path, content).with_context(|| format!("writing {}", path.display()))?;
         println!("wrote {} ({} bytes)", path.display(), content.len());
     }
-    let root = out_dir.join("mod.rs");
-    std::fs::write(&root, rustfmt(&emit_root(schema)))?;
-    println!("wrote {}", root.display());
     Ok(())
 }
 
@@ -110,23 +99,32 @@ const HEADER: &str = "\
 // UCA International Users Group under the Apache License 2.0.
 ";
 
-fn emit_root(schema: &Schema) -> String {
-    let v = &schema.vintage;
+fn emit_root(schemas: &[Schema]) -> String {
+    let mut mods = String::new();
+    for s in schemas {
+        // Each vintage is feature-gated: a program targeting CGMES 3.0 should not pay to
+        // compile the 2.4.15 tables.
+        let _ = writeln!(
+            mods,
+            "#[cfg(feature = \"{v}\")]\npub mod {v};",
+            v = s.vintage
+        );
+    }
     format!(
         "{HEADER}
 //! Generated CIM schema vintages.
+//!
+//! Each vintage is behind a feature of the same name.
 
-pub mod {v};
-"
+{mods}"
     )
 }
 
 fn emit_mod(schema: &Schema) -> String {
     let v = &schema.vintage;
-    let title = match v.as_str() {
-        "cgmes3" => "CGMES 3.0 (IEC TS 61970-600-1/-2:2021)",
-        other => other,
-    };
+    let title = crate::vintage::by_key(v)
+        .map(|x| x.title)
+        .unwrap_or(v.as_str());
     format!(
         "{HEADER}
 //! {title}.
@@ -232,11 +230,20 @@ use crate::schema::*;
     s.push_str("];\n\n");
 
     // Profiles.
-    writeln!(s, "static PROFILES: &[ProfileDef] = &[").unwrap();
-    for p in &schema.profiles {
+    for (i, p) in schema.profiles.iter().enumerate() {
+        let aliases: Vec<String> = p.aliases.iter().map(|a| quote(a)).collect();
         writeln!(
             s,
-            "    ProfileDef {{ keyword: {}, version_iri: {}, title: {} }},",
+            "static PROFILE_ALIASES_{i}: &[&str] = &[{}];",
+            aliases.join(", ")
+        )
+        .unwrap();
+    }
+    writeln!(s, "static PROFILES: &[ProfileDef] = &[").unwrap();
+    for (i, p) in schema.profiles.iter().enumerate() {
+        writeln!(
+            s,
+            "    ProfileDef {{ keyword: {}, version_iri: {}, aliases: PROFILE_ALIASES_{i}, title: {} }},",
             quote(&p.keyword),
             quote(&p.version_iri),
             quote(&p.title)

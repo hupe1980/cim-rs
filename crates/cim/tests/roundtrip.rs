@@ -242,3 +242,118 @@ fn output_is_valid_xml_and_reparses_strictly() {
     );
     assert_eq!(h.profiles.len(), 1);
 }
+
+/// Export as the file set the model was read from, and read that back.
+fn round_trip_as_loaded(ds: &Dataset, dir: &std::path::Path) -> (Dataset, usize) {
+    let saved = ds.save_as_loaded(dir).unwrap();
+    assert!(
+        saved.skipped.is_empty(),
+        "unresolved headers: {:?}",
+        saved.skipped
+    );
+
+    let mut back = Dataset::new(ds.schema());
+    back.load_files(&saved.written, &ReadOptions::lenient())
+        .unwrap();
+    (back, saved.written.len())
+}
+
+#[test]
+fn saving_as_loaded_reproduces_the_input_file_set() {
+    let dir = require_corpus!(common::cgmes3_model(
+        "MicroGrid/MicroGid-BaseCase/MicroGrid-BaseCase-Merged"
+    ));
+    let files = common::xml_files(&dir);
+    let mut original = Dataset::new(SCHEMA);
+    original
+        .load_files(&files, &ReadOptions::lenient())
+        .unwrap();
+
+    let out = std::env::temp_dir().join(format!("cim-as-loaded-{}", std::process::id()));
+    std::fs::create_dir_all(&out).unwrap();
+    let (back, written) = round_trip_as_loaded(&original, &out);
+
+    // One output file per input file, not one per profile.
+    assert_eq!(
+        written,
+        files.len(),
+        "export produced {written} files from {} inputs",
+        files.len()
+    );
+
+    // And the model itself is unchanged.
+    let differences = diff(&project(&original), &project(&back));
+    if !differences.is_empty() {
+        for d in differences.iter().take(10) {
+            eprintln!("  {d}");
+        }
+        panic!(
+            "{} differences after file-set round-trip",
+            differences.len()
+        );
+    }
+
+    // Headers survive, including their full profile declarations.
+    assert_eq!(back.headers().len(), original.headers().len());
+    let profiles_of = |d: &Dataset| {
+        let mut v: Vec<Vec<String>> = d.headers().iter().map(|h| h.profiles.clone()).collect();
+        v.sort();
+        v
+    };
+    assert_eq!(
+        profiles_of(&original),
+        profiles_of(&back),
+        "header profile declarations changed"
+    );
+
+    std::fs::remove_dir_all(&out).ok();
+}
+
+#[test]
+fn a_multi_profile_file_is_not_split_apart() {
+    // The MicroGrid Equipment file declares both CoreEquipment and ShortCircuit. Writing
+    // that profile set must produce one file containing both, and it must not duplicate
+    // the Equipment content into a separate ShortCircuit file.
+    let dir = require_corpus!(common::cgmes3_model(
+        "MicroGrid/MicroGid-BaseCase/MicroGrid-NL-MAS"
+    ));
+    let files = common::xml_files(&dir);
+    let mut ds = Dataset::new(SCHEMA);
+    ds.load_files(&files, &ReadOptions::lenient()).unwrap();
+
+    let eq = SCHEMA.profile_by_keyword("EQ").unwrap();
+    let sc = SCHEMA.profile_by_keyword("SC").unwrap();
+
+    let render = |mask| {
+        let mut buf = Vec::new();
+        cim::writer::write_profiles(&ds, mask, &mut buf, None, &WriteOptions::default()).unwrap();
+        buf
+    };
+
+    let eq_only = render(eq.mask());
+    let sc_only = render(sc.mask());
+    let both = render(eq.mask() | sc.mask());
+
+    assert_ne!(
+        eq_only, sc_only,
+        "the ShortCircuit export is a copy of the Equipment export"
+    );
+    assert!(
+        both.len() > eq_only.len() && both.len() > sc_only.len(),
+        "the combined export should carry more than either alone"
+    );
+
+    // Short-circuit attributes belong to the ShortCircuit slice, not the Equipment one.
+    let text = |b: &[u8]| String::from_utf8(b.to_vec()).unwrap();
+    assert!(
+        text(&sc_only).contains("ACLineSegment.r0"),
+        "SC lost its own data"
+    );
+    assert!(
+        !text(&eq_only).contains("ACLineSegment.r0"),
+        "ShortCircuit data leaked into the Equipment export"
+    );
+    assert!(text(&both).contains("ACLineSegment.r0"));
+    // The plain (Equipment) resistance is present alongside the zero-sequence one.
+    assert!(text(&both).contains("<cim:ACLineSegment.r>"));
+}

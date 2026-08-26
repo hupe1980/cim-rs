@@ -2,7 +2,7 @@
 
 **A best-in-class, single-crate Rust implementation of the IEC Common Information Model (CIM) for power systems.**
 
-Status: **M0–M2 implemented** (see [Roadmap](#8-roadmap)) · License: MIT OR Apache-2.0 · Edition: Rust 2024
+Status: **M0–M4 implemented** (see [Roadmap](#8-roadmap)) · License: MIT OR Apache-2.0 · Edition: Rust 2024
 
 > This document records the design rationale and the decisions behind it. For usage, see
 > the [README](README.md).
@@ -39,7 +39,7 @@ pass interoperability testing.
 | IEC 61970-501 | RDFS profile representation | :2006 — input format for codegen |
 | IEC 61970-552 | CIM/XML model exchange format | :2016 — file format, headers, difference models |
 | IEC 61970-600-1/-2 | **CGMES 3.0** profile set | :2021 — primary interop target |
-| CGMES 2.4.15 | Legacy profile set (CIM16) | planned (M4); the design cost is already paid |
+| CGMES 2.4.15 | Legacy profile set (CIM16) | **implemented** — feature `cgmes2` |
 
 Notes that shape the design:
 
@@ -199,12 +199,46 @@ Nor can it be fixed by filtering on class membership: the SSH vocabulary declare
 silently dropped that data — a bug the round-trip tests caught.
 
 `Slot` therefore records **which profiles' files a value came from**, at no memory cost
-(the mask fits in existing padding). Export writes a value to profile *P* when its
-provenance includes *P*, falling back to the attribute's declared profiles only for values
-set programmatically. Export then reproduces the original file set: 112 MiB in, 110 MiB
-out, every value preserved.
+(the mask fits in existing padding).
 
-### 4.4 Dataset layer
+Provenance alone is not quite enough, because one file declares several profiles. A CGMES
+3.0 Equipment file commonly declares both `CoreEquipment` and `ShortCircuit`, so every
+value in it carries provenance `{EQ, SC}` and a naive rule would write the whole file to
+both exports — measured at 1.40× the input. The rule that works, and the one the writer,
+the coverage report and validation all share, is
+[`Schema::effective_profiles`]: **provenance intersected with the profiles that declare
+the attribute**, falling back to the declaration when that intersection is empty. Export
+then reproduces the input: 112 MiB in, 111 MiB out, every value preserved.
+
+The complementary half is [`Dataset::save_as_loaded`], which writes one file per loaded
+header carrying exactly the profiles that header declared. Without it a twelve-file model
+comes back as eleven per-profile files — legal, but not what was read.
+
+### 4.4 A second vintage, as the test of the architecture
+
+CGMES 2.4.15 was implemented to find out whether "a new vintage is a regeneration" was
+true. It required no runtime change. What it did require was making three assumptions
+explicit that CGMES 3.0 had let pass:
+
+* **Vocabularies do not always describe themselves.** CGMES 3.0 carries an `owl:Ontology`
+  block naming its keyword and version IRI; 2.4.15 predates that convention. Vintages are
+  now described by an explicit table (`xtask/src/vintage.rs`) that the ontology block
+  fills in where present.
+* **A profile is not always a file.** 2.4.15 ships Equipment, Operation and ShortCircuit
+  in one vocabulary, separated only by `cims:stereotype` — precisely the split CGMES 3.0
+  later made into separate files. The generator therefore accepts several profiles drawn
+  from one file, partitioned by stereotype, with one profile taking the residue.
+* **Enumeration literals are identified by `rdf:type`, not by a stereotype.** 2.4.15
+  omits the `enum` stereotype entirely. A reader relying on it produces *empty
+  enumerations* and never says so — which is exactly what happened, and what the
+  CGMES 2.4.15 tests now prevent.
+
+The result: 12 profiles, 401 classes, 3,539 attributes, 48 enumerations, the `cim16`
+namespace, the `entsoe` extension prefix and the `TPBD` boundary profile CGMES 3.0 later
+dropped — all behind a feature flag, sharing every line of reader, writer and validator
+with CGMES 3.0.
+
+### 4.5 Dataset layer
 
 - Object storage with an mRID index and per-class index.
 - Multi-file assembly that merges by mRID, promotes to the most specific class seen, and
@@ -215,7 +249,7 @@ out, every value preserved.
   exchanges are routinely partial, since an SSH file references equipment defined
   elsewhere.
 
-### 4.5 I/O
+### 4.6 I/O
 
 - **Reader**: a streaming pull parser on `quick-xml`, specialized to the 61970-552 RDF/XML
   subset. Element names are resolved through a cache keyed on raw QName bytes, since
@@ -226,19 +260,22 @@ out, every value preserved.
   per-namespace prefixes, `rdf:ID` versus `rdf:about` by profile convention, full headers.
 - **Zip** archives behind the `zip` feature, for CGMES model sets as distributed.
 
-### 4.6 Validation & diagnostics
+### 4.7 Validation & diagnostics
 
 Every finding is a structured `Diagnostic` with a stable rule code (`CIM0001`–`CIM0015`),
 severity, and the object, class, attribute and source file it concerns — so a pipeline can
 filter and fail on specific classes of problem without matching message text.
 
-Two checks required care to be *useful* rather than merely correct:
+Three checks required care to be *useful* rather than merely correct:
 
 - A required attribute is not reported missing when it is an association side the schema
   never serializes (`AssociationUsed = No`), since that side is derived by inversion.
-- "Attribute not in profile" reports only data that would genuinely be **lost on export** —
-  a value no loaded profile would write. Judging by declaration alone produced 9,995
-  warnings on `RealGrid`, all of them true and none of them actionable.
+- "Attribute not in profile" reports a header that **under-declares its own content** —
+  `RealGrid`'s Equipment file carries ShortCircuit attributes while declaring only
+  `CoreEquipment`. Reporting this per *value* produced 10,000 identical findings; it is
+  aggregated per attribute with a count, giving 32.
+- One identifier naming two *unrelated* classes is an error, but an identifier naming a
+  base class and then a subclass is ordinary profile composition and must stay silent.
 
 ## 5. Single-Crate Strategy & Features
 
@@ -312,23 +349,21 @@ ds.write_zip("out.zip", Default::default())?;     // deterministic, header-compl
 
 ## 8. Roadmap
 
-1. **M0 — Foundation** ✅ codegen pipeline (RDFS → IR → Rust), CGMES 3.0 schema tables,
-   streaming reader, mRID index, dataset merge. *Exit met: the published conformity
-   corpus parses and navigates.*
-2. **M1 — Round-trip** ✅ writer, headers, boundary handling, all eleven profiles,
-   difference models, round-trip suite over the conformity models. *Exit met: 31 model
-   sets, 250,698 objects, no value lost.*
-3. **M2 — Validation** ✅ structural checks with stable rule codes, profile coverage
-   reporting, zip archives, `codegen --check` in CI. *Exit met: the complete merged
-   conformity models validate with zero findings.*
-4. **M3 — Hardening & 0.x release** — `cargo-fuzz` targets on the reader, criterion
-   benchmarks in CI, `cargo-semver-checks`, a documentation book, crates.io release,
-   and a feedback loop with the LF Energy / SOGNO community (possible cimgen upstreaming).
-5. **M4 — CGMES 2.4.15** — the second vintage, exercising the "new vintage is a
-   regeneration" claim against a schema that is genuinely different (CIM16 namespace,
-   TPBD profile). The design cost of this was paid up front; the work is codegen input
-   selection plus a feature gate.
-6. **Post-1.0 candidates** — CIM18 on publication, IEC 61970-501 Ed.2 RDFS input,
+1. **M0 — Foundation** ✅ codegen pipeline (RDFS → IR → Rust), schema tables, streaming
+   reader, mRID index, dataset merge.
+2. **M1 — Round-trip** ✅ writer, headers, boundary handling, every profile, difference
+   models, faithful file-set export.
+3. **M2 — Validation** ✅ structural checks with stable rule codes, profile coverage,
+   zip archives, `codegen --check` in CI.
+4. **M3 — Hardening** ✅ deterministic mutation campaign on stable, `cargo-fuzz` targets
+   on nightly, throughput benchmarks, feature-matrix CI.
+5. **M4 — CGMES 2.4.15** ✅ the second vintage, which is what turned
+   "a new vintage is a regeneration" from a claim into a tested property
+   (see [4.4](#44-a-second-vintage-as-the-test-of-the-architecture)).
+6. **Next — 0.x release** — `cargo-semver-checks`, a documentation book, crates.io
+   release, and a feedback loop with the LF Energy / SOGNO community (possible cimgen
+   upstreaming).
+7. **Post-1.0 candidates** — CIM18 on publication, IEC 61970-501 Ed.2 RDFS input,
    ENTSO-E NC/RCP extension profiles, CIM JSON-LD syntax, IEC 62325 market profiles, a
    native SHACL subset, Python and WASM bindings (separate crates), topology-processing
    helpers.
@@ -337,12 +372,14 @@ ds.write_zip("out.zip", Default::default())?;     // deterministic, header-compl
 
 | | |
 |---|---|
-| Conformity corpus read | 31 model sets, 361 files, 250,698 objects, **0 diagnostics** |
-| Round-trip | MicroGrid, MiniGrid, SmallGrid, FullGrid, merged variants — no value lost |
-| Difference models | published EQ diff applied: 346 retractions, 612 assertions, 0 errors |
+| CGMES 3.0 corpus | 31 model sets, 361 files, 250,698 objects, **0 diagnostics** |
+| CGMES 2.4.15 corpus | 52 archives, 273,144 objects, **0 errors** (9 recovered namespace mistakes) |
+| Round-trip | every conformity model, by profile and as the original file set — no value lost |
+| Difference models | applied on both vintages, including class replacement; a T4 archive's inconsistency resolves to none |
 | Validation | complete merged models: **0 findings** |
-| Throughput | 248 MiB/s read, 304 MiB/s write (RealGrid, 112 MiB) |
-| Test suite | 57 tests; corpus-backed tests skip cleanly on a fresh clone |
+| Throughput | 251 MiB/s read, 353 MiB/s write, 9.5M objects/s validate (RealGrid, 112 MiB) |
+| Robustness | every truncation, 1,225 single-byte corruptions and every region deletion of a valid document: no panic |
+| Test suite | 94 tests; corpus-backed tests skip cleanly on a fresh clone |
 
 ## 9. Risks & Mitigations
 

@@ -16,28 +16,28 @@ use crate::schema::{AttrId, ClassId, EnumId, EnumValueId, ProfileId};
 /// Profiles of this vintage.
 pub mod profiles {
     use super::ProfileId;
-    /// `DL` — Diagram Layout Vocabulary
-    pub const DL: ProfileId = ProfileId(0);
-    /// `DY` — Dynamics Vocabulary
-    pub const DY: ProfileId = ProfileId(1);
     /// `EQ` — Core Equipment Vocabulary
-    pub const EQ: ProfileId = ProfileId(2);
+    pub const EQ: ProfileId = ProfileId(0);
+    /// `OP` — Operation Vocabulary
+    pub const OP: ProfileId = ProfileId(1);
+    /// `SC` — Short Circuit Vocabulary
+    pub const SC: ProfileId = ProfileId(2);
     /// `EQBD` — Equipment Boundary Vocabulary
     pub const EQBD: ProfileId = ProfileId(3);
-    /// `GL` — Geographical Location Vocabulary
-    pub const GL: ProfileId = ProfileId(4);
-    /// `FH` — File Header Vocabulary
-    pub const FH: ProfileId = ProfileId(5);
-    /// `OP` — Operation Vocabulary
-    pub const OP: ProfileId = ProfileId(6);
-    /// `SC` — Short Circuit Vocabulary
-    pub const SC: ProfileId = ProfileId(7);
-    /// `SV` — State Variables Vocabulary
-    pub const SV: ProfileId = ProfileId(8);
     /// `SSH` — Steady State Hypothesis Vocabulary
-    pub const SSH: ProfileId = ProfileId(9);
+    pub const SSH: ProfileId = ProfileId(4);
     /// `TP` — Topology Vocabulary
-    pub const TP: ProfileId = ProfileId(10);
+    pub const TP: ProfileId = ProfileId(5);
+    /// `SV` — State Variables Vocabulary
+    pub const SV: ProfileId = ProfileId(6);
+    /// `DL` — Diagram Layout Vocabulary
+    pub const DL: ProfileId = ProfileId(7);
+    /// `GL` — Geographical Location Vocabulary
+    pub const GL: ProfileId = ProfileId(8);
+    /// `DY` — Dynamics Vocabulary
+    pub const DY: ProfileId = ProfileId(9);
+    /// `FH` — File Header Vocabulary
+    pub const FH: ProfileId = ProfileId(10);
 }
 
 /// Classes of this vintage.

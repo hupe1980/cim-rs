@@ -1,8 +1,12 @@
 //! A Rust implementation of the IEC Common Information Model for power systems.
 //!
-//! `cim` reads, navigates, validates and writes CIM grid models — principally
-//! **CGMES 3.0** (IEC TS 61970-600-1/-2:2021), the format European transmission system
-//! operators exchange grid models in.
+//! `cim` reads, navigates, validates and writes CIM grid models in both profile sets
+//! European transmission system operators use: **CGMES 3.0**
+//! (IEC TS 61970-600-1/-2:2021) and **CGMES 2.4.15**.
+//!
+//! Each vintage is a module behind a feature of the same name — [`cgmes3`] (default) and
+//! [`cgmes2`] — holding its schema tables, typed views and named constants. Identifiers
+//! are per-vintage and cannot be mixed by accident.
 //!
 //! # What this crate models
 //!
@@ -52,7 +56,15 @@
 //!
 //! Everything model-specific — class and attribute tables, typed views, named constants
 //! — is generated from the official RDFS vocabularies. Everything else is written
-//! against the [`schema`] interface, so a new CIM vintage is a regeneration.
+//! against the [`schema`] interface, so a new CIM vintage is a regeneration rather than a
+//! rewrite; CGMES 2.4.15 is supported without a line of vintage-specific runtime code.
+//!
+//! Two facts about CGMES shape the I/O layer. Common attributes such as
+//! `IdentifiedObject.mRID` are declared in almost every profile, so what a file should
+//! contain cannot be decided from declarations alone — each value records the profile of
+//! the file it came from. And one file normally serves several profiles at once, so
+//! [`Dataset::save_as_loaded`] writes a model back as the file set it was read from
+//! rather than splitting it apart.
 //!
 //! # Conformance
 //!

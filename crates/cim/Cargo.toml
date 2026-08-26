@@ -16,8 +16,28 @@ quick-xml.workspace = true
 zip = { version = "2", optional = true, default-features = false, features = ["deflate"] }
 
 [features]
-default = []
+default = ["cgmes3"]
+
+# CGMES 3.0 (IEC TS 61970-600-1/-2:2021) — the current interop target.
+cgmes3 = []
+# CGMES 2.4.15 — the profile set in production use across Europe since 2021.
+cgmes2 = []
+
+# Read and write CGMES model sets packaged as zip archives.
 zip = ["dep:zip"]
+
+[[bench]]
+name = "throughput"
+harness = false
+required-features = ["cgmes3"]
+
+[dev-dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [package.metadata.docs.rs]
 all-features = true
+
+[[example]]
+name = "cim_info"
+required-features = ["cgmes3"]
+

@@ -199,6 +199,23 @@ impl Dataset {
         }
     }
 
+    /// Change an object's class, keeping the per-class index consistent.
+    ///
+    /// Used when a difference model reclassifies an object.
+    pub fn reclassify(&mut self, id: ObjectId, class: ClassId) {
+        let Some(old) = self.get(id).map(|o| o.class()) else {
+            return;
+        };
+        if old == class {
+            return;
+        }
+        if let Some(v) = self.by_class.get_mut(&old) {
+            v.retain(|&x| x != id);
+        }
+        self.by_class.entry(class).or_default().push(id);
+        self.objects[id.index()].set_class(class);
+    }
+
     /// Remove an object. Its [`ObjectId`] is never reused.
     pub fn remove(&mut self, id: ObjectId) -> Option<Object> {
         if !matches!(self.alive.get(id.index()), Some(true)) {

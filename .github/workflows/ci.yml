@@ -27,12 +27,36 @@ jobs:
         run: cargo clippy --workspace --all-features --all-targets
       - name: Tests without the standards corpus
         run: cargo test --workspace --all-features
+      - name: Benchmarks compile and run on synthetic data
+        run: cargo bench -p cim --features cgmes3
       - name: Documentation
         run: cargo doc --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
 
-  # Full conformance: fetch the published ENTSO-E artifacts and check the committed
+  # Each vintage must stand alone: a program targeting CGMES 3.0 should not have to
+  # compile the 2.4.15 tables, and vice versa.
+  features:
+    name: feature combination ${{ matrix.features }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - "--no-default-features"
+          - "--no-default-features --features cgmes3"
+          - "--no-default-features --features cgmes2"
+          - "--no-default-features --features zip"
+          - "--no-default-features --features cgmes3,cgmes2,zip"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy -p cim ${{ matrix.features }} --all-targets
+
+  # Full conformance: fetch the published ENTSO-E artifacts, check the committed
   # generated sources still match them, then run the corpus-backed tests.
   conformance:
     name: conformance against published models
@@ -52,6 +76,8 @@ jobs:
         run: cargo xtask codegen --check
       - name: Conformity corpus tests
         run: cargo test --workspace --all-features --release
+      - name: Throughput against the largest published model
+        run: cargo bench -p cim --features cgmes3
 
   msrv:
     name: minimum supported Rust version
@@ -61,6 +87,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p cim --all-features
+
+  fuzz:
+    name: fuzz targets build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      # A short run on every change; the deterministic mutation campaign in
+      # tests/robustness.rs covers the same contract on stable in the main job.
+      - run: cargo fuzz run read_cimxml -- -max_total_time=60
+      - run: cargo fuzz run roundtrip -- -max_total_time=60
 
   deny:
     name: licenses & advisories

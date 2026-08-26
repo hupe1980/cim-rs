@@ -587,3 +587,167 @@ fn conflicting_values_across_profiles_keep_both_files_populated() {
         );
     }
 }
+
+#[test]
+fn one_identifier_naming_two_unrelated_classes_is_an_error() {
+    // Two files describing the same object is how profiles compose and must be silent.
+    // Two files giving one identifier to unrelated classes is a defect: one silently
+    // absorbs the other.
+    let src = doc(&format!(
+        r##"{}
+  <cim:LinearShuntCompensator rdf:ID="_{A}">
+    <cim:IdentifiedObject.name>S</cim:IdentifiedObject.name>
+  </cim:LinearShuntCompensator>
+  <cim:NonlinearShuntCompensator rdf:about="#_{A}">
+    <cim:ShuntCompensator.nomU>380</cim:ShuntCompensator.nomU>
+  </cim:NonlinearShuntCompensator>"##,
+        header("http://iec.ch/TC57/ns/CIM/CoreEquipment-EU/3.0")
+    ));
+    let (_, report) = read(&src);
+    assert_eq!(report.by_rule(Rule::DuplicateMrid).count(), 1, "{report}");
+    assert!(report.has_errors());
+}
+
+#[test]
+fn a_subclass_refining_a_base_class_is_not_a_conflict() {
+    // A profile may describe an object through a base class; the more specific class
+    // wins and no diagnostic is raised.
+    let src = doc(&format!(
+        r##"{}
+  <cim:ConductingEquipment rdf:ID="_{A}">
+    <cim:IdentifiedObject.name>E</cim:IdentifiedObject.name>
+  </cim:ConductingEquipment>
+  <cim:Breaker rdf:about="#_{A}">
+    <cim:Switch.normalOpen>true</cim:Switch.normalOpen>
+  </cim:Breaker>"##,
+        header("http://iec.ch/TC57/ns/CIM/CoreEquipment-EU/3.0")
+    ));
+    let (ds, report) = read(&src);
+    assert_eq!(report.by_rule(Rule::DuplicateMrid).count(), 0, "{report}");
+
+    let obj = ds.by_mrid(&Mrid::parse(A)).unwrap();
+    assert_eq!(
+        SCHEMA.class(obj.class()).name,
+        "Breaker",
+        "the more specific class must win"
+    );
+}
+
+#[test]
+fn a_difference_can_change_an_objects_class() {
+    let base = doc(&format!(
+        r##"{}
+  <cim:LinearShuntCompensator rdf:ID="_{A}">
+    <cim:IdentifiedObject.name>S</cim:IdentifiedObject.name>
+    <cim:LinearShuntCompensator.bPerSection>0.000346</cim:LinearShuntCompensator.bPerSection>
+  </cim:LinearShuntCompensator>"##,
+        header("http://iec.ch/TC57/ns/CIM/CoreEquipment-EU/3.0")
+    ));
+    let diff_doc = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:cim="{NS}" xmlns:dm="http://iec.ch/TC57/61970-552/DifferenceModel/1#"
+         xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#"
+         xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <dm:DifferenceModel rdf:about="urn:uuid:33333333-3333-4333-8333-333333333333">
+    <md:Model.profile>http://iec.ch/TC57/ns/CIM/CoreEquipment-EU/3.0</md:Model.profile>
+    <dm:reverseDifferences rdf:parseType="Statements">
+      <cim:LinearShuntCompensator rdf:ID="_{A}">
+        <cim:LinearShuntCompensator.bPerSection>0.000346</cim:LinearShuntCompensator.bPerSection>
+      </cim:LinearShuntCompensator>
+    </dm:reverseDifferences>
+    <dm:forwardDifferences rdf:parseType="Statements">
+      <cim:NonlinearShuntCompensator rdf:ID="_{A}">
+        <cim:ShuntCompensator.nomU>380</cim:ShuntCompensator.nomU>
+      </cim:NonlinearShuntCompensator>
+    </dm:forwardDifferences>
+  </dm:DifferenceModel>
+</rdf:RDF>"##
+    );
+
+    let (mut ds, _) = read(&base);
+    let subject = Mrid::parse(A);
+    assert_eq!(
+        SCHEMA.class(ds.by_mrid(&subject).unwrap().class()).name,
+        "LinearShuntCompensator"
+    );
+
+    let diff = cim::reader::read_difference(SCHEMA, diff_doc.as_bytes(), Some("diff.xml"))
+        .unwrap()
+        .expect("a difference model");
+    // The statement group names its class, which is what makes reclassification possible.
+    assert!(diff.forward.iter().all(|s| s.class.is_some()));
+
+    let report = ds.apply_difference(&diff);
+    assert!(!report.has_errors(), "{report}");
+
+    let obj = ds.by_mrid(&subject).unwrap();
+    assert_eq!(
+        SCHEMA.class(obj.class()).name,
+        "NonlinearShuntCompensator",
+        "the difference did not reclassify the object"
+    );
+    // The old class's exclusive attribute was retracted; the new one's was asserted.
+    let b_per_section = SCHEMA
+        .find_attr(NS, "LinearShuntCompensator.bPerSection")
+        .unwrap();
+    assert!(!obj.has(b_per_section), "stale attribute survived");
+    assert!(obj.has(SCHEMA.find_attr(NS, "ShuntCompensator.nomU").unwrap()));
+    // Reclassification is reported so it is never silent.
+    assert!(
+        report.iter().any(|d| d.message.contains("reclassifies")),
+        "{report}"
+    );
+}
+
+#[test]
+fn an_enum_literal_in_the_wrong_namespace_is_recovered_with_a_warning() {
+    // Published models do misplace these: a CGMES 2.4.15 test model writes the ENTSO-E
+    // extension literal `LimitTypeKind.patl` under the `cim` namespace. The qualified
+    // name is unambiguous, so the value must be recovered rather than dropped.
+    let eu_attr = SCHEMA
+        .find_attr(EU, "OperationalLimitType.kind")
+        .expect("the extension attribute exists");
+    let correct = SCHEMA
+        .find_enum_value(EU, "LimitKind.patl")
+        .expect("the extension literal exists");
+
+    let src = doc(&format!(
+        r##"{}
+  <cim:OperationalLimitType rdf:ID="_{A}">
+    <cim:IdentifiedObject.name>PATL</cim:IdentifiedObject.name>
+    <eu:OperationalLimitType.kind rdf:resource="{NS}LimitKind.patl"/>
+  </cim:OperationalLimitType>"##,
+        header("http://iec.ch/TC57/ns/CIM/Operation-EU/3.0")
+    ));
+    let (ds, report) = read(&src);
+
+    let obj = ds.by_mrid(&Mrid::parse(A)).expect("object read");
+    assert_eq!(
+        obj.get(eu_attr).and_then(|v| v.as_enum()),
+        Some(correct),
+        "the value was dropped instead of recovered"
+    );
+
+    let recovered: Vec<_> = report.by_rule(Rule::InvalidValue).collect();
+    assert_eq!(recovered.len(), 1, "{report}");
+    assert_eq!(recovered[0].severity, Severity::Warning);
+    assert!(recovered[0].message.contains("recovered"), "{report}");
+    assert!(
+        !report.has_errors(),
+        "a recoverable mistake is not an error"
+    );
+}
+
+#[test]
+fn a_genuinely_unknown_enum_literal_is_still_an_error() {
+    let src = doc(&format!(
+        r##"{}
+  <cim:OperationalLimitType rdf:ID="_{A}">
+    <eu:OperationalLimitType.kind rdf:resource="{NS}LimitKind.doesNotExist"/>
+  </cim:OperationalLimitType>"##,
+        header("http://iec.ch/TC57/ns/CIM/Operation-EU/3.0")
+    ));
+    let (_, report) = read(&src);
+    assert!(report.has_errors(), "{report}");
+    assert_eq!(report.by_rule(Rule::InvalidValue).count(), 1);
+}

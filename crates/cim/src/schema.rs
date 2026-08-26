@@ -158,9 +158,28 @@ pub struct NamespaceDef {
 pub struct ProfileDef {
     /// Short keyword, e.g. `EQ`, `SSH`.
     pub keyword: &'static str,
-    /// Value written as `md:Model.profile`.
+    /// Canonical IRI, written as `md:Model.profile` on export.
     pub version_iri: &'static str,
+    /// Further IRIs that also denote this profile when read.
+    ///
+    /// Published models name profiles by IRIs that changed between revisions, and some
+    /// profiles have more than one accepted form.
+    pub aliases: &'static [&'static str],
     pub title: &'static str,
+}
+
+impl ProfileDef {
+    /// Whether `iri` denotes this profile, ignoring the trailing version segment.
+    pub fn matches_iri(&self, iri: &str) -> bool {
+        if self.version_iri == iri || self.aliases.contains(&iri) {
+            return true;
+        }
+        fn stem(s: &str) -> Option<&str> {
+            s.rsplit_once('/').map(|(a, _)| a)
+        }
+        let Some(want) = stem(iri) else { return false };
+        stem(self.version_iri) == Some(want) || self.aliases.iter().any(|a| stem(a) == Some(want))
+    }
 }
 
 #[derive(Debug)]
@@ -331,14 +350,12 @@ impl Schema {
     /// The trailing version segment is ignored so that, for example, a file declaring
     /// `.../CoreEquipment-EU/3.0` still resolves when the schema knows `/3.0`.
     pub fn profile_by_iri(&self, iri: &str) -> Option<ProfileId> {
-        if let Some(i) = self.profiles.iter().position(|p| p.version_iri == iri) {
-            return Some(ProfileId(i as u16));
-        }
-        let stem = |s: &str| s.rsplit_once('/').map(|(a, _)| a.to_owned());
-        let want = stem(iri)?;
+        // Exact matches first, so an alias never shadows a profile's own IRI.
         self.profiles
             .iter()
-            .position(|p| stem(p.version_iri).as_deref() == Some(&want))
+            .position(|p| p.version_iri == iri)
+            .or_else(|| self.profiles.iter().position(|p| p.aliases.contains(&iri)))
+            .or_else(|| self.profiles.iter().position(|p| p.matches_iri(iri)))
             .map(|i| ProfileId(i as u16))
     }
 
@@ -360,6 +377,19 @@ impl Schema {
         binary_search(self.enum_value_index, ns, qualified)
     }
 
+    /// Look up an enumeration literal by qualified name in any namespace.
+    ///
+    /// Exporters do misplace these: published CGMES 2.4.15 test models write the
+    /// ENTSO-E extension literal `LimitTypeKind.patl` under the `cim` namespace. The
+    /// qualified name is unambiguous on its own, so the value can still be recovered —
+    /// callers should report the namespace mismatch rather than accept it silently.
+    pub fn find_enum_value_any_ns(&self, qualified: &str) -> Option<EnumValueId> {
+        self.enum_value_index
+            .iter()
+            .find(|(_, name, _)| *name == qualified)
+            .map(|(_, _, id)| *id)
+    }
+
     /// Whether `class` is `ancestor` or inherits from it.
     pub fn is_a(&self, class: ClassId, ancestor: ClassId) -> bool {
         class == ancestor || self.class(class).ancestors.contains(&ancestor)
@@ -375,6 +405,27 @@ impl Schema {
             .rev()
             .copied()
             .find(|&a| self.attr(a).label == label)
+    }
+
+    /// The profiles a stored value belongs in — the single rule the writer, the
+    /// per-profile coverage report and validation all use.
+    ///
+    /// `provenance` is the profile mask recorded on the value when it was read (zero for
+    /// values set programmatically). It is *intersected* with the profiles that actually
+    /// declare the attribute, because one instance file routinely declares several
+    /// profiles: a CGMES 3.0 Equipment file commonly declares both `CoreEquipment` and
+    /// `ShortCircuit`, and without the intersection every value in it would be written to
+    /// both exports, duplicating the whole file.
+    ///
+    /// When the intersection is empty the provenance carries no usable answer — the file
+    /// declared a profile that does not declare this attribute — and the attribute's own
+    /// declaration is used, so the value still has somewhere to go.
+    pub fn effective_profiles(&self, attr: AttrId, provenance: ProfileMask) -> ProfileMask {
+        let declared = self.attr(attr).used_in;
+        match provenance & declared {
+            0 => declared,
+            narrowed => narrowed,
+        }
     }
 
     /// Every concrete class, useful for tooling that enumerates the model.

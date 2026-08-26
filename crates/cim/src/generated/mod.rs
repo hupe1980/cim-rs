@@ -5,5 +5,10 @@
 // UCA International Users Group under the Apache License 2.0.
 
 //! Generated CIM schema vintages.
+//!
+//! Each vintage is behind a feature of the same name.
 
+#[cfg(feature = "cgmes2")]
+pub mod cgmes2;
+#[cfg(feature = "cgmes3")]
 pub mod cgmes3;

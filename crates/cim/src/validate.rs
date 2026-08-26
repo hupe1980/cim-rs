@@ -6,12 +6,14 @@
 //! SHACL shapes — are deliberately out of scope; run those with a SHACL engine against
 //! the same data.
 
+use std::collections::BTreeMap;
+
 use crate::dataset::Dataset;
 use crate::error::{Diagnostic, Report, Rule, Severity};
 use crate::header::ModelHeader;
 use crate::mrid::Mrid;
 use crate::object::Object;
-use crate::schema::{AttrKind, ProfileId, ProfileMask, Schema};
+use crate::schema::{AttrId, AttrKind, ProfileId, ProfileMask, Schema};
 use crate::value::Value;
 
 /// Which checks to run.
@@ -31,6 +33,9 @@ pub struct ValidateOptions {
     pub deprecation: bool,
     /// Check that headers declare dependencies that were actually loaded.
     pub dependencies: bool,
+    /// Report attributes whose data belongs to a profile none of the loaded files
+    /// declares — a header that under-declares what its file contains.
+    pub profile_reach: bool,
     /// Check each loaded file's header against the structural requirements of
     /// IEC 61970-552.
     pub headers: bool,
@@ -51,6 +56,7 @@ impl Default for ValidateOptions {
             mrid_conformance: true,
             deprecation: false,
             dependencies: true,
+            profile_reach: true,
             headers: true,
             profiles: 0,
             max_diagnostics: 10_000,
@@ -69,6 +75,7 @@ impl ValidateOptions {
             mrid_conformance: false,
             deprecation: false,
             dependencies: false,
+            profile_reach: false,
             headers: false,
             ..Default::default()
         }
@@ -118,6 +125,9 @@ pub fn validate_with(dataset: &Dataset, options: &ValidateOptions) -> Report {
     }
     if options.dependencies {
         check_dependencies(dataset, &mut report);
+    }
+    if options.profile_reach && scope != ProfileMask::MAX {
+        check_profile_reach(dataset, scope, &mut report);
     }
 
     for (_, obj) in dataset.iter() {
@@ -230,35 +240,6 @@ fn check_object(
             );
         }
 
-        // Report only data that would genuinely be lost: a value no profile in scope
-        // would write. A value carries the profile of the file it came from, so
-        // ShortCircuit attributes inside an Equipment file are correctly not flagged.
-        if scope != ProfileMask::MAX {
-            let orphaned = obj.get_all(*attr_id).iter().all(|slot| {
-                let effective = if slot.profiles != 0 {
-                    slot.profiles
-                } else {
-                    def.used_in
-                };
-                effective & scope == 0
-            });
-            if orphaned {
-                report.push(
-                    Diagnostic::warning(
-                        Rule::AttributeNotInProfile,
-                        format!(
-                            "{} is set but no loaded profile would write it, so it would \
-                             be lost on export",
-                            def.name
-                        ),
-                    )
-                    .with_class(class.name)
-                    .with_object(mrid.canonical())
-                    .with_attribute(def.name),
-                );
-            }
-        }
-
         if options.deprecation && def.deprecated {
             report.push(
                 Diagnostic::info(
@@ -317,6 +298,55 @@ fn check_object(
                 }
             }
         }
+    }
+}
+
+/// Report attributes whose data belongs to a profile no loaded file declares.
+///
+/// This is a header/content mismatch: a CGMES 3.0 Equipment file that carries
+/// ShortCircuit attributes should declare the ShortCircuit profile in its header.
+/// Findings are aggregated **per attribute**, not per value — one such mismatch can
+/// affect hundreds of thousands of values, and repeating the same finding for each is
+/// noise rather than information.
+fn check_profile_reach(dataset: &Dataset, scope: ProfileMask, report: &mut Report) {
+    let schema = dataset.schema();
+    // Attribute -> (number of values affected, an example object).
+    let mut out_of_scope: BTreeMap<AttrId, (usize, String)> = BTreeMap::new();
+
+    for (_, obj) in dataset.iter() {
+        for slot in obj.slots() {
+            if schema.effective_profiles(slot.attr, slot.profiles) & scope == 0 {
+                let entry = out_of_scope
+                    .entry(slot.attr)
+                    .or_insert_with(|| (0, obj.mrid().canonical()));
+                entry.0 += 1;
+            }
+        }
+    }
+
+    for (attr, (count, example)) in out_of_scope {
+        let def = schema.attr(attr);
+        let profiles: Vec<&str> = schema
+            .profiles
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| def.used_in & (1 << i) != 0)
+            .map(|(_, p)| p.keyword)
+            .collect();
+        report.push(
+            Diagnostic::warning(
+                Rule::AttributeNotInProfile,
+                format!(
+                    "{} is set on {count} object(s) but belongs to profile(s) {} that no \
+                     loaded file declares; the header under-declares its content",
+                    def.name,
+                    profiles.join("+")
+                ),
+            )
+            .with_class(schema.class(def.owner).name)
+            .with_object(example)
+            .with_attribute(def.name),
+        );
     }
 }
 
@@ -419,11 +449,17 @@ pub fn profile_coverage(dataset: &Dataset) -> Vec<ProfileCoverage> {
                 if !def.is_serialized_in(profile) {
                     continue;
                 }
-                let n = obj.count(*attr_id);
+                // Count exactly what the writer would emit, so the report cannot drift
+                // from the export.
+                let n = obj
+                    .get_all(*attr_id)
+                    .iter()
+                    .filter(|s| schema.effective_profiles(s.attr, s.profiles) & mask != 0)
+                    .count();
                 if n > 0 {
                     any = true;
                     attributes += n;
-                } else if def.mult.is_required() {
+                } else if def.mult.is_required() && obj.count(*attr_id) == 0 {
                     missing_required += 1;
                 }
             }

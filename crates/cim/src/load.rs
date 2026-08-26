@@ -16,7 +16,7 @@ use crate::object::Object;
 use crate::reader::{ReadOptions, read_header, read_into};
 use crate::schema::{AttrKind, Primitive, ProfileId, Schema};
 use crate::value::Value;
-use crate::writer::{WriteOptions, conventional_id_style, write_profile};
+use crate::writer::{WriteOptions, conventional_id_style, write_profile, write_profiles};
 
 /// Outcome of loading one or more files.
 #[derive(Debug, Default)]
@@ -144,7 +144,66 @@ impl Dataset {
         for s in &diff.forward {
             self.apply_statement(s, true, &mut report);
         }
+        self.apply_reclassifications(diff, &mut report);
         report
+    }
+
+    /// Apply class changes named by a difference's forward statements.
+    ///
+    /// IEC 61970-552 treats an object's type as a statement like any other, so a
+    /// difference may replace an object's class. The published CGMES conformity tests do
+    /// exactly this, turning a `LinearShuntCompensator` into a `NonlinearShuntCompensator`
+    /// under the same identifier; the reverse statements retract the old class's
+    /// attributes and the forward ones assert the new class's.
+    fn apply_reclassifications(&mut self, diff: &DifferenceModel, report: &mut Report) {
+        let schema = self.schema();
+        let mut seen: Vec<Mrid> = Vec::new();
+
+        for s in &diff.forward {
+            let Some(qname) = &s.class else { continue };
+            if seen.contains(&s.subject) {
+                continue;
+            }
+            seen.push(s.subject.clone());
+
+            let Some(target) = schema.find_class(&qname.ns, &qname.local) else {
+                report.push(
+                    Diagnostic::warning(
+                        Rule::UnknownClass,
+                        format!("difference names unknown class {}", qname.local),
+                    )
+                    .with_object(s.subject.canonical()),
+                );
+                continue;
+            };
+            let Some(id) = self.find(&s.subject) else {
+                continue;
+            };
+            let Some(current) = self.get(id).map(|o| o.class()) else {
+                continue;
+            };
+            if current == target {
+                continue;
+            }
+            // Only a genuine change is applied. Narrowing to a subclass is a refinement
+            // and is accepted; anything else is a reclassification worth recording.
+            if !schema.is_a(target, current) {
+                report.push(
+                    Diagnostic::info(
+                        Rule::Structure,
+                        format!(
+                            "difference reclassifies {} from {} to {}",
+                            s.subject.canonical(),
+                            schema.class(current).name,
+                            schema.class(target).name
+                        ),
+                    )
+                    .with_object(s.subject.canonical())
+                    .with_class(schema.class(target).name),
+                );
+            }
+            self.reclassify(id, target);
+        }
     }
 
     fn apply_statement(&mut self, s: &Statement, assert: bool, report: &mut Report) {
@@ -166,8 +225,22 @@ impl Dataset {
 
         let value = match &s.value {
             StatementValue::Resource(iri) => match def.kind {
-                AttrKind::Enumeration(_) => match iri.rsplit_once('#') {
-                    Some((ns, local)) => match schema.find_enum_value(&format!("{ns}#"), local) {
+                AttrKind::Enumeration(_) => {
+                    let Some((ns, local)) = iri.rsplit_once('#') else {
+                        report.push(
+                            Diagnostic::error(
+                                Rule::InvalidValue,
+                                format!("enumeration value {iri} is not an IRI"),
+                            )
+                            .with_attribute(def.name),
+                        );
+                        return;
+                    };
+                    match schema
+                        .find_enum_value(&format!("{ns}#"), local)
+                        // As in the reader: a misplaced namespace is recoverable.
+                        .or_else(|| schema.find_enum_value_any_ns(local))
+                    {
                         Some(v) => Value::Enum(v),
                         None => {
                             report.push(
@@ -180,18 +253,8 @@ impl Dataset {
                             );
                             return;
                         }
-                    },
-                    None => {
-                        report.push(
-                            Diagnostic::error(
-                                Rule::InvalidValue,
-                                format!("enumeration value {iri} is not an IRI"),
-                            )
-                            .with_attribute(def.name),
-                        );
-                        return;
                     }
-                },
+                }
                 _ => Value::Reference(Mrid::parse(iri)),
             },
             StatementValue::Literal(text) => {
@@ -221,8 +284,8 @@ impl Dataset {
             None if assert => {
                 let class = s
                     .class
-                    .as_deref()
-                    .and_then(|c| schema.find_class(&s.predicate_ns, c))
+                    .as_ref()
+                    .and_then(|c| schema.find_class(&c.ns, &c.local))
                     .unwrap_or(def.owner);
                 self.insert(Object::new(class, s.subject.clone()))
             }
@@ -282,9 +345,10 @@ impl Dataset {
         )
     }
 
-    /// Write every profile the dataset carries data for, into `dir`.
+    /// Write every profile the dataset carries data for, into `dir`, one file each.
     ///
-    /// Files are named `<stem>_<KEYWORD>.xml`. Returns the paths written.
+    /// Files are named `<stem>_<KEYWORD>.xml`. Use [`Dataset::save_as_loaded`] instead
+    /// when the goal is to reproduce the file set the model was read from.
     pub fn save_all_profiles(&self, dir: &Path, stem: &str) -> Result<Vec<PathBuf>> {
         std::fs::create_dir_all(dir)?;
         let mut written = Vec::new();
@@ -298,6 +362,75 @@ impl Dataset {
         }
         Ok(written)
     }
+
+    /// Write the model back out as the file set it was read from.
+    ///
+    /// One output file per loaded header, carrying exactly the profiles that header
+    /// declared and reusing the header itself. CGMES normally exchanges Equipment,
+    /// Operation and ShortCircuit in a single file; splitting them apart would be legal
+    /// but would not reproduce the input, so this is the faithful export.
+    ///
+    /// Returns the paths written. Headers without a resolvable profile are skipped and
+    /// named in the returned report.
+    pub fn save_as_loaded(&self, dir: &Path) -> Result<SaveReport> {
+        std::fs::create_dir_all(dir)?;
+        let schema = self.schema();
+        let mut out = SaveReport::default();
+
+        for (i, header) in self.headers().iter().enumerate() {
+            let profiles = header
+                .profiles
+                .iter()
+                .filter_map(|iri| schema.profile_by_iri(iri))
+                .fold(0, |acc, p| acc | p.mask());
+            if profiles == 0 {
+                out.skipped.push(
+                    header
+                        .source
+                        .clone()
+                        .unwrap_or_else(|| format!("header {i}")),
+                );
+                continue;
+            }
+
+            // Reuse the source file name so a directory can be regenerated in place.
+            let name = header
+                .source
+                .clone()
+                .unwrap_or_else(|| format!("model_{i}.xml"));
+            let path = dir.join(&name);
+
+            // A file that defines objects uses rdf:ID; one that adds to objects defined
+            // elsewhere uses rdf:about. Pick by the first profile the header declares.
+            let first = header
+                .profiles
+                .iter()
+                .find_map(|iri| schema.profile_by_iri(iri))
+                .expect("profiles is non-zero");
+            let options = WriteOptions {
+                id_style: conventional_id_style(schema, first),
+                ..Default::default()
+            };
+            let file = File::create(&path)?;
+            write_profiles(
+                self,
+                profiles,
+                BufWriter::with_capacity(1 << 16, file),
+                Some(header.clone()),
+                &options,
+            )?;
+            out.written.push(path);
+        }
+        Ok(out)
+    }
+}
+
+/// Outcome of writing a model back to disk.
+#[derive(Debug, Default)]
+pub struct SaveReport {
+    pub written: Vec<PathBuf>,
+    /// Headers that declared no profile this schema recognises.
+    pub skipped: Vec<String>,
 }
 
 /// A minimal conforming header for a profile export.

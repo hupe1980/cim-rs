@@ -11,7 +11,7 @@ use crate::error::{Error, Result};
 use crate::header::{DM_NS, MD_NS, ModelHeader, ModelKind};
 use crate::mrid::Mrid;
 use crate::object::Object;
-use crate::schema::{AttrKind, ClassId, ProfileId, Schema};
+use crate::schema::{AttrKind, ClassId, ProfileId, ProfileMask, Schema};
 use crate::value::Value;
 
 const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -34,12 +34,12 @@ pub enum IdStyle {
 /// Options controlling serialization.
 #[derive(Clone, Debug)]
 pub struct WriteOptions {
-    /// Write only attributes belonging to this profile.
+    /// Write only attributes belonging to these profiles; zero means "everything".
     ///
-    /// Required for conforming output: a CGMES instance file contains exactly the
-    /// attributes of the profile it declares. Without it, every known attribute is
-    /// written, which is useful for debugging but is not a valid exchange file.
-    pub profile: Option<ProfileId>,
+    /// This is a *set*, not a single profile, because one instance file routinely serves
+    /// several: CGMES normally exchanges Equipment, Operation and ShortCircuit together,
+    /// and a file that declared only one of them would not reproduce its input.
+    pub profiles: ProfileMask,
     pub id_style: IdStyle,
     /// Indent nested elements. Off produces smaller files.
     pub pretty: bool,
@@ -52,7 +52,7 @@ pub struct WriteOptions {
 impl Default for WriteOptions {
     fn default() -> Self {
         WriteOptions {
-            profile: None,
+            profiles: 0,
             id_style: IdStyle::RdfId,
             pretty: true,
             header: None,
@@ -62,10 +62,15 @@ impl Default for WriteOptions {
 }
 
 impl WriteOptions {
-    /// Write the given profile's attributes, as a conforming instance file.
+    /// Write one profile's attributes, as a conforming instance file.
     pub fn profile(profile: ProfileId) -> WriteOptions {
+        WriteOptions::profiles(profile.mask())
+    }
+
+    /// Write the attributes of every profile in `profiles`.
+    pub fn profiles(profiles: ProfileMask) -> WriteOptions {
         WriteOptions {
-            profile: Some(profile),
+            profiles,
             ..Default::default()
         }
     }
@@ -123,9 +128,7 @@ where
     w.end_document()
 }
 
-/// Write one profile's slice of a dataset: only objects and attributes in that profile.
-///
-/// This is how a multi-profile model is exported back to the file set it came from.
+/// Write one profile's slice of a dataset.
 pub fn write_profile<W: Write>(
     dataset: &Dataset,
     profile: ProfileId,
@@ -133,39 +136,47 @@ pub fn write_profile<W: Write>(
     header: Option<ModelHeader>,
     options: &WriteOptions,
 ) -> Result<()> {
+    write_profiles(dataset, profile.mask(), out, header, options)
+}
+
+/// Write the slice of a dataset belonging to a set of profiles.
+///
+/// This is how a multi-profile model is exported back to the file set it came from: a
+/// CGMES Equipment file that declared Equipment, Operation and ShortCircuit is rebuilt by
+/// passing all three, rather than being split into three files.
+pub fn write_profiles<W: Write>(
+    dataset: &Dataset,
+    profiles: ProfileMask,
+    out: W,
+    header: Option<ModelHeader>,
+    options: &WriteOptions,
+) -> Result<()> {
     let schema = dataset.schema();
     let mut opts = options.clone();
-    opts.profile = Some(profile);
+    opts.profiles = profiles;
     opts.header = header;
 
     let ids: Vec<_> = dataset
         .iter()
-        .filter(|(_, o)| object_has_content_in(schema, o, profile))
+        .filter(|(_, o)| object_has_content_in(schema, o, profiles))
         .map(|(id, _)| id)
         .collect();
     write_objects(dataset, ids.into_iter(), out, &opts)
 }
 
-/// Whether a stored value belongs in `profile`'s instance file.
+/// Whether a stored value belongs in an instance file serving `profiles`.
 ///
-/// Provenance decides: a value read from an Equipment file belongs in the Equipment
-/// file, even though `IdentifiedObject.mRID` is declared in almost every profile.
-/// Values with unknown provenance — set programmatically — fall back to the attribute's
-/// declared profiles.
+/// See [`Schema::effective_profiles`] for the rule. A zero mask means "no filtering".
 #[inline]
-fn slot_belongs_to(schema: &Schema, slot: &crate::object::Slot, profile: ProfileId) -> bool {
-    if slot.profiles != 0 {
-        slot.profiles & profile.mask() != 0
-    } else {
-        schema.attr(slot.attr).is_serialized_in(profile)
-    }
+fn slot_belongs_to(schema: &Schema, slot: &crate::object::Slot, profiles: ProfileMask) -> bool {
+    profiles == 0 || schema.effective_profiles(slot.attr, slot.profiles) & profiles != 0
 }
 
-/// Whether an object would serialize any attribute in `profile`.
-fn object_has_content_in(schema: &Schema, obj: &Object, profile: ProfileId) -> bool {
+/// Whether an object would serialize any attribute in `profiles`.
+fn object_has_content_in(schema: &Schema, obj: &Object, profiles: ProfileMask) -> bool {
     obj.slots()
         .iter()
-        .any(|s| slot_belongs_to(schema, s, profile))
+        .any(|s| slot_belongs_to(schema, s, profiles))
 }
 
 struct Writer<W: Write> {
@@ -272,9 +283,7 @@ impl<W: Write> Writer<W> {
             let def = self.schema.attr(*attr_id);
             let attr_prefix = self.schema.namespace(def.ns).prefix;
             for slot in obj.get_all(*attr_id) {
-                if let Some(p) = options.profile
-                    && !slot_belongs_to(self.schema, slot, p)
-                {
+                if !slot_belongs_to(self.schema, slot, options.profiles) {
                     continue;
                 }
                 written.push((attr_prefix, def.name, &slot.value));

@@ -5,13 +5,13 @@
 [![CI](https://github.com/hupe1980/cim-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/hupe1980/cim-rs/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
-`cim` reads, navigates, validates and writes CIM grid models — principally **CGMES 3.0**
-(IEC TS 61970-600-1/-2:2021), the format European transmission system operators exchange
-grid models in.
+`cim` reads, navigates, validates and writes CIM grid models in both profile sets European
+transmission system operators use: **CGMES 3.0** (IEC TS 61970-600-1/-2:2021) and
+**CGMES 2.4.15**.
 
-It reads the complete published ENTSO-E CGMES 3.0 conformity assessment corpus — 31 model
-sets, 361 files, 250,698 objects — **without a single diagnostic**, and round-trips every
-one of them without losing a value.
+It reads both published ENTSO-E conformity assessment corpora — 31 CGMES 3.0 model sets
+and 52 CGMES 2.4.15 archives, **523,842 objects in total** — without a single error, and
+round-trips them back into the file sets they came from without losing a value.
 
 ```rust,no_run
 use cim::prelude::*;
@@ -64,14 +64,19 @@ so an export reproduces the original file set.
 set `inService` on busbar sections. Export decisions are made from what an object actually
 carries, never from class-level profile membership.
 
+**One file serves several profiles.** A CGMES Equipment file normally declares Equipment,
+Operation *and* ShortCircuit. Treating profiles one at a time either duplicates the whole
+file into each export or splits one input file into three. [`Dataset::save_as_loaded`]
+writes the model back as the file set it was read from, header declarations included.
+
 ## Design
 
 Two layers in one crate:
 
 ```text
 cim
-├── generated from the official RDFS vocabularies
-│   ├── schema tables      443 classes, 3,624 attributes, 51 enums, 36 datatypes
+├── generated from the official RDFS vocabularies, one module per vintage
+│   ├── schema tables      classes, attributes, enums, datatypes, profiles
 │   ├── typed views        zero-cost accessors per class
 │   └── named constants    ClassId / AttrId / EnumValueId, spelled as the standard does
 └── hand-written, schema-agnostic
@@ -81,6 +86,11 @@ cim
     └── validate           structural checks with stable rule codes
 ```
 
+| Vintage | Feature | Namespace | Classes | Attributes | Enums | Profiles |
+|---|---|---|---|---|---|---|
+| CGMES 3.0 | `cgmes3` *(default)* | `CIM100` + `eu` | 443 | 3,624 | 51 | 11 |
+| CGMES 2.4.15 | `cgmes2` | `cim16` + `entsoe` | 401 | 3,539 | 48 | 12 |
+
 Objects are stored **sparsely** — only attributes actually present are kept. That is a
 match for the data, not a compromise: a `Terminal` has around thirty possible attributes
 and an SSH file sets exactly one. Typed access comes from generated zero-cost views rather
@@ -88,20 +98,25 @@ than a generated struct per class, which keeps profile merging natural, memory
 proportional to real content, and compile times low.
 
 Everything model-specific is generated; everything else is written against the `schema`
-interface. **Adopting a new CIM vintage is a regeneration, not a rewrite.**
+interface. **Adopting a new CIM vintage is a regeneration, not a rewrite** — and CGMES
+2.4.15 is the proof: a different namespace, a different extension prefix, an extra
+boundary profile, and vocabularies that predate the self-describing ontology header, all
+handled without a line of vintage-specific runtime code.
 
 ## Performance
 
-ENTSO-E `RealGrid` conformity model, release build, Apple M-series:
+ENTSO-E `RealGrid` conformity model — 112 MiB, 188,547 objects, 1.1M values — release
+build, Apple M-series:
 
 | | |
 |---|---|
-| Read | 112 MiB in **0.45 s** (248 MiB/s), 188,547 objects |
-| Write | 110 MiB in **0.36 s** (304 MiB/s) |
-| Validate | 1.1M values in **0.04 s** |
+| Read | **0.45 s** (251 MiB/s, 422k objects/s) |
+| Write | **0.32 s** (353 MiB/s) |
+| Validate | **0.02 s** (9.5M objects/s) |
 | Inverse index | **0.02 s** |
 
-Reproduce with `cargo run --release --example bench -- <model directory>`.
+Reproduce with `cargo bench -p cim`. The benchmark also measures a synthetic model, so it
+runs without the standards corpus.
 
 ## Installation
 
@@ -110,11 +125,17 @@ Reproduce with `cargo run --release --example bench -- <model directory>`.
 cim = "0.1"
 ```
 
-Optional features:
+Features:
 
 | Feature | Effect |
 |---|---|
+| `cgmes3` *(default)* | CGMES 3.0 schema, views and constants |
+| `cgmes2` | CGMES 2.4.15 schema, views and constants |
 | `zip` | Read and write CGMES model sets packaged as zip archives |
+
+Vintages are independent modules: enabling only the one you need keeps compile time and
+binary size down. Both can be on at once — identifiers are per-vintage, so they cannot be
+mixed by accident.
 
 ## Usage
 
@@ -195,7 +216,10 @@ use cim::cgmes3::SCHEMA;
 
 # let ds = Dataset::new(SCHEMA);
 # let dir = std::path::Path::new(".");
-// One file per profile the model carries data for.
+// Write the model back as the file set it was read from, headers included.
+let saved = ds.save_as_loaded(dir)?;
+
+// Or one file per profile, for a model built programmatically.
 let written = ds.save_all_profiles(dir, "MyModel")?;
 # Ok::<(), cim::Error>(())
 ```
@@ -225,10 +249,19 @@ if let Some(diff) = cim::reader::read_difference(SCHEMA, bytes, None)? {
 | IEC 61970-301:2020+AMD1:2022 | CIM base semantics (CIM17) |
 | IEC 61970-501 | RDFS profile representation — the codegen input |
 | IEC 61970-552:2016 | CIM/XML format: identity, headers, difference models |
-| IEC TS 61970-600-1/-2:2021 | CGMES 3.0 profile set — the interop target |
+| IEC TS 61970-600-1/-2:2021 | CGMES 3.0 profile set |
 
-Profiles supported: **EQ, EQBD, OP, SC, SSH, TP, SV, DL, GL, DY**, plus the header
-vocabulary.
+Profiles supported: **EQ, OP, SC, EQBD, SSH, TP, SV, DL, GL, DY** and the header
+vocabulary in both vintages, plus **TPBD** in CGMES 2.4.15.
+
+Difference models are fully supported, including the reclassification the conformity
+tests exercise — a difference may replace a `LinearShuntCompensator` with a
+`NonlinearShuntCompensator` under the same identifier, and applying it changes the class.
+
+Reading is deliberately forgiving of published files that deviate, and never silently: a
+non-UUID identifier is kept and flagged; an enumeration literal written under the wrong
+namespace is recovered and flagged; an unparseable value is dropped and flagged. Every
+deviation is a [`Diagnostic`] with a stable rule code.
 
 ## Development
 
@@ -238,9 +271,19 @@ The standards artifacts are **not vendored**. Fetch them, then regenerate:
 scripts/fetch-specs.sh          # ENTSO-E RDFS + SHACL + conformity models -> specs/
 cargo xtask codegen             # RDFS -> crates/cim/src/generated/
 cargo xtask codegen --check     # CI gate: committed sources match the vocabularies
-cargo xtask inspect             # summarise the parsed schema
+cargo xtask inspect             # summarise every parsed vintage
 cargo test --workspace --all-features
+cargo bench -p cim              # throughput, synthetic and (if fetched) RealGrid
 ```
+
+Adding a vintage means adding an entry to `xtask/src/vintage.rs` — which RDFS files it is
+made of and, where the vocabularies do not say so themselves, the profile IRIs their
+instance files declare — then regenerating.
+
+Robustness is covered two ways: `crates/cim/tests/robustness.rs` runs a deterministic
+mutation campaign (truncation at every byte, single-byte corruption, region deletion) on
+stable as part of `cargo test`, and `fuzz/` holds `cargo-fuzz` targets for longer runs on
+nightly.
 
 `specs/` is gitignored. Generated sources **are** committed: builds stay reproducible and
 fast for downstream users, docs.rs works, and a schema change appears as a reviewable

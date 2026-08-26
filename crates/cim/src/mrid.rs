@@ -9,11 +9,17 @@ use std::fmt;
 
 /// A master resource identifier.
 ///
-/// Conforming identifiers are stored as 16 raw UUID bytes; anything else is preserved
-/// as-is so that reading and re-writing a non-conforming file is lossless.
+/// Conforming identifiers are stored as 16 raw UUID bytes; anything else is kept as text.
+/// Either way the *decoration* CIM/XML puts around an identifier — a leading `#`, a
+/// leading `_`, a `urn:uuid:` prefix — is stripped on parse, so `_abc`, `#_abc` and
+/// `urn:uuid:abc` all denote the same object.
 ///
-/// Comparison is over the canonical form, so `_ABC…`, `#_abc…` and `urn:uuid:abc…`
-/// all denote the same object.
+/// Stripping applies to non-conforming identifiers too. It has to: a file using
+/// `rdf:ID="_X"` and `rdf:resource="#_X"` for a non-UUID `X` would otherwise produce two
+/// distinct identifiers and every reference in it would dangle. The cost is that output
+/// is normalized to the form IEC 61970-552 requires — `rdf:ID="_X"` — even where the
+/// input omitted the underscore. That is a syntactic change, never a semantic one:
+/// re-reading yields the same identifier.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Mrid(Repr);
 
@@ -21,7 +27,7 @@ pub struct Mrid(Repr);
 enum Repr {
     /// A well-formed UUID, stored as raw bytes (align 1, keeping `Mrid` at 24 bytes).
     Uuid([u8; 16]),
-    /// A non-conforming identifier, preserved verbatim.
+    /// A non-conforming identifier, stripped of CIM/XML decoration.
     Other(Box<str>),
 }
 
@@ -34,7 +40,7 @@ impl Mrid {
         let core = strip_decoration(raw);
         match parse_uuid(core) {
             Some(bytes) => Mrid(Repr::Uuid(bytes)),
-            None => Mrid(Repr::Other(raw.into())),
+            None => Mrid(Repr::Other(core.into())),
         }
     }
 
@@ -67,11 +73,13 @@ impl Mrid {
     }
 
     /// The `rdf:ID` form: a leading underscore, as mandated for locally defined objects.
+    ///
+    /// The underscore is required — `rdf:ID` is an XML `NCName`, which may not begin with
+    /// a digit — so it is added for non-UUID identifiers too.
     pub fn to_rdf_id(&self) -> String {
         match &self.0 {
             Repr::Uuid(b) => format!("_{}", format_uuid(b)),
-            // Preserve verbatim; adding an underscore would change a foreign identifier.
-            Repr::Other(s) => s.to_string(),
+            Repr::Other(s) => format!("_{s}"),
         }
     }
 
@@ -81,6 +89,8 @@ impl Mrid {
     }
 
     /// The `urn:uuid:` form used by `md:FullModel` identifiers.
+    ///
+    /// A non-UUID identifier has no valid URN form and is returned as-is.
     pub fn to_urn(&self) -> String {
         match &self.0 {
             Repr::Uuid(b) => format!("urn:uuid:{}", format_uuid(b)),
@@ -204,14 +214,28 @@ mod tests {
     }
 
     #[test]
-    fn non_conforming_identifiers_are_preserved_verbatim() {
-        for raw in ["not-a-uuid", "12345", "", "urn:uuid:garbage"] {
+    fn non_conforming_identifiers_keep_their_value_but_lose_decoration() {
+        for raw in ["not-a-uuid", "12345", "garbage"] {
             let m = Mrid::parse(raw);
             assert!(!m.is_uuid(), "{raw:?}");
             assert_eq!(m.canonical(), raw);
-            // Round-tripping must not invent decoration for foreign identifiers.
-            assert_eq!(m.to_rdf_id(), raw);
+            // Output uses the conforming form; re-reading gives the same identifier.
+            assert_eq!(m.to_rdf_id(), format!("_{raw}"));
+            assert_eq!(Mrid::parse(&m.to_rdf_id()), m);
+            assert_eq!(Mrid::parse(&m.to_rdf_resource()), m);
         }
+    }
+
+    #[test]
+    fn a_non_uuid_reference_resolves_to_its_definition() {
+        // A real 2.4.15 model uses unhyphenated 32-character identifiers. `rdf:ID="_X"`
+        // and `rdf:resource="#_X"` must denote one object, or every such reference
+        // dangles.
+        let defined = Mrid::parse("_c1d5c14b8f8011e08e4d00247eb1f55e");
+        let referenced = Mrid::parse("#_c1d5c14b8f8011e08e4d00247eb1f55e");
+        assert!(!defined.is_uuid());
+        assert_eq!(defined, referenced);
+        assert_eq!(defined.canonical(), "c1d5c14b8f8011e08e4d00247eb1f55e");
     }
 
     #[test]

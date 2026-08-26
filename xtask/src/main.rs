@@ -11,6 +11,7 @@
 mod emit;
 mod ir;
 mod rdfs;
+mod vintage;
 
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
@@ -37,104 +38,92 @@ fn root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Locate the CGMES 3.0 RDFS directory, which the fetch script places under `specs/`.
-fn cgmes3_rdfs_dir() -> Result<PathBuf> {
-    let dir = root().join("specs/application-profiles-library/CGMES/CurrentRelease/RDFS");
+/// Resolve one vintage's RDFS files, which `scripts/fetch-specs.sh` places under `specs/`.
+fn load(vintage: &'static vintage::Vintage) -> Result<ir::Schema> {
+    let dir = root().join("specs").join(vintage.rdfs_dir);
     if !dir.is_dir() {
         bail!(
             "missing {}\nRun scripts/fetch-specs.sh first to download the standards artifacts.",
             dir.display()
         );
     }
-    Ok(dir)
-}
-
-fn load_cgmes3() -> Result<ir::Schema> {
-    let dir = cgmes3_rdfs_dir()?;
-    let mut sources = ir::discover_profiles(
-        &dir,
-        &["61970-600-2_", "-AP-Voc-RDFS2020", "-AP-Voc-RDFS2019"],
-    )?;
-    // The 2019 header vocabulary is superseded by the 2020 one shipped alongside it.
-    sources.retain(|s| !s.path.to_string_lossy().contains("Header-AP-Voc-RDFS2019"));
-    ir::build("cgmes3", &sources)
+    let mut sources = Vec::new();
+    for spec in vintage.profiles {
+        let path = dir.join(spec.file);
+        if !path.is_file() {
+            bail!(
+                "vintage {} names {} but it is not present in {}",
+                vintage.key,
+                spec.file,
+                dir.display()
+            );
+        }
+        sources.push(ir::ProfileSource { path, spec });
+    }
+    ir::build(vintage.key, &sources)
 }
 
 fn codegen(check: bool) -> Result<()> {
-    let schema = load_cgmes3()?;
     let out_dir = root().join("crates/cim/src/generated");
-    emit::emit(&schema, &out_dir, check)
+    let schemas: Vec<ir::Schema> = vintage::VINTAGES.iter().map(load).collect::<Result<_>>()?;
+    emit::emit(&schemas, &out_dir, check)
 }
 
 fn inspect() -> Result<()> {
-    let schema = load_cgmes3()?;
-    println!("vintage: {}", schema.vintage);
-    println!("profiles: {}", schema.profiles.len());
-    for p in &schema.profiles {
-        println!("  {:<6} {:<44} {}", p.keyword, p.version_iri, p.source_file);
-    }
-    println!("namespaces:");
-    for (ns, prefix) in &schema.namespaces {
-        println!("  {prefix:<8} {ns}");
-    }
-
-    let concrete = schema.classes.values().filter(|c| c.concrete).count();
-    let attrs: usize = schema.classes.values().map(|c| c.attributes.len()).sum();
-    println!(
-        "classes: {} ({} concrete, {} abstract)",
-        schema.classes.len(),
-        concrete,
-        schema.classes.len() - concrete
-    );
-    println!("attributes (declared): {attrs}");
-    println!("enums: {}", schema.enums.len());
-    println!(
-        "enum values: {}",
-        schema.enums.values().map(|e| e.values.len()).sum::<usize>()
-    );
-    println!("datatypes: {}", schema.datatypes.len());
-
-    // Deepest inheritance chain drives the size of flattened structs.
-    let mut worst = ("", 0usize, 0usize);
-    for name in schema.classes.keys() {
-        let all = schema.all_attributes(name).len();
-        let depth = schema.ancestors(name).len();
-        if all > worst.2 {
-            worst = (&name.local, depth, all);
-        }
-    }
-    println!(
-        "widest class: {} (depth {}, {} total attributes)",
-        worst.0, worst.1, worst.2
-    );
-
-    let total_flat: usize = schema
-        .classes
-        .values()
-        .filter(|c| c.concrete)
-        .map(|c| schema.all_attributes(&c.name).len())
-        .sum();
-    println!("sum of flattened fields over concrete classes: {total_flat}");
-
-    println!("\nsample datatypes:");
-    for dt in schema.datatypes.values().take(6) {
-        println!(
-            "  {:<20} {:?} unit={:?} mult={:?}",
-            dt.name.local, dt.value, dt.unit, dt.multiplier
-        );
-    }
-    println!("\nsample class:");
-    if let Some((n, _)) = schema
-        .classes
-        .iter()
-        .find(|(n, _)| n.local == "ACLineSegment")
-    {
-        for (owner, a) in schema.all_attributes(n).iter().take(12) {
+    for v in vintage::VINTAGES {
+        let schema = match load(v) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("== {} ==\n  unavailable: {e}\n", v.key);
+                continue;
+            }
+        };
+        println!("== {} — {} ==", schema.vintage, v.title);
+        println!("  profiles: {}", schema.profiles.len());
+        for p in &schema.profiles {
             println!(
-                "  {:<24}.{:<22} {:?} {:?}",
-                owner.name.local, a.label, a.kind, a.multiplicity
+                "    {:<6} {:<52} {}",
+                p.keyword, p.version_iri, p.source_file
+            );
+            for alias in &p.aliases {
+                println!("           also {alias}");
+            }
+        }
+        println!("  namespaces:");
+        for (ns, prefix) in &schema.namespaces {
+            println!("    {prefix:<8} {ns}");
+        }
+        let concrete = schema.classes.values().filter(|c| c.concrete).count();
+        let attrs: usize = schema.classes.values().map(|c| c.attributes.len()).sum();
+        println!(
+            "  classes: {} ({concrete} concrete), attributes: {attrs}, enums: {} ({} values), datatypes: {}",
+            schema.classes.len(),
+            schema.enums.len(),
+            schema.enums.values().map(|e| e.values.len()).sum::<usize>(),
+            schema.datatypes.len()
+        );
+
+        // Attributes exclusive to one profile show whether the split worked.
+        for (i, p) in schema.profiles.iter().enumerate() {
+            let bit: u32 = 1 << i;
+            let exclusive = schema
+                .classes
+                .values()
+                .flat_map(|c| &c.attributes)
+                .filter(|a| a.profiles == bit)
+                .count();
+            let total = schema
+                .classes
+                .values()
+                .flat_map(|c| &c.attributes)
+                .filter(|a| a.profiles & bit != 0)
+                .count();
+            println!(
+                "    {:<6} {total:>5} attributes, {exclusive:>5} exclusive",
+                p.keyword
             );
         }
+        println!();
     }
     Ok(())
 }

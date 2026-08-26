@@ -15,7 +15,7 @@ use quick_xml::events::{BytesStart, Event};
 use crate::dataset::Dataset;
 use crate::error::{Diagnostic, Error, Report, Result, Rule};
 use crate::header::{
-    DM_NS, DifferenceModel, MD_NS, ModelHeader, ModelKind, Statement, StatementValue,
+    DM_NS, DifferenceModel, MD_NS, ModelHeader, ModelKind, QualifiedName, Statement, StatementValue,
 };
 use crate::mrid::Mrid;
 use crate::object::Object;
@@ -264,7 +264,7 @@ impl<'a> Parser<'a> {
         // Property whose text is being accumulated.
         let mut pending: Option<PendingText> = None;
         // Difference-model assembly state.
-        let mut diff_subject: Option<(Mrid, Option<String>)> = None;
+        let mut diff_subject: Option<(Mrid, Option<QualifiedName>)> = None;
         let mut diff_into_forward = false;
 
         loop {
@@ -470,7 +470,7 @@ impl<'a> Parser<'a> {
         difference: &mut Option<DifferenceModel>,
         object: &mut Option<Object>,
         pending: &mut Option<PendingText>,
-        diff_subject: &mut Option<(Mrid, Option<String>)>,
+        diff_subject: &mut Option<(Mrid, Option<QualifiedName>)>,
         diff_into_forward: &mut bool,
         profile_mask: &mut ProfileMask,
         line: Option<u64>,
@@ -671,13 +671,19 @@ impl<'a> Parser<'a> {
             }
 
             Ctx::DiffSet => {
-                // Each statement group is an rdf:Description naming its subject.
+                // Each statement group names its subject, either with a bare
+                // `rdf:Description` or with the class element itself. The latter carries
+                // real information: a difference may reclassify an object.
                 if let Some(about) = self
                     .attr(e, RDF_NS, "about")?
                     .or(self.attr(e, RDF_NS, "ID")?)
                 {
-                    let class =
-                        expanded.and_then(|(_, local)| (local != "Description").then_some(local));
+                    let class = expanded.and_then(|(ns, local)| {
+                        (!(ns == RDF_NS && local == "Description")).then(|| QualifiedName {
+                            ns: ns.to_owned(),
+                            local,
+                        })
+                    });
                     *diff_subject = Some((Mrid::parse(&about), class));
                     return Ok(Ctx::DiffSubject);
                 }
@@ -790,35 +796,51 @@ impl<'a> Parser<'a> {
         let value = match def.kind {
             AttrKind::Enumeration(_) => {
                 // Enumeration literals are absolute IRIs: `<ns>#Enum.literal`.
-                match res.rsplit_once('#') {
-                    Some((ns, local)) => {
-                        match self.schema.find_enum_value(&format!("{ns}#"), local) {
-                            Some(v) => Value::Enum(v),
-                            None => {
-                                self.diag(
-                                    Diagnostic::error(
-                                        Rule::InvalidValue,
-                                        format!("unknown enumeration literal {res:?}"),
-                                    )
-                                    .with_attribute(def.name)
-                                    .with_object(obj.mrid().canonical()),
-                                    line,
-                                );
-                                return;
-                            }
+                let Some((ns, local)) = res.rsplit_once('#') else {
+                    self.diag(
+                        Diagnostic::error(
+                            Rule::InvalidValue,
+                            format!("enumeration value {res:?} is not an IRI"),
+                        )
+                        .with_attribute(def.name),
+                        line,
+                    );
+                    return;
+                };
+                match self.schema.find_enum_value(&format!("{ns}#"), local) {
+                    Some(v) => Value::Enum(v),
+                    // The qualified name is unambiguous even when the namespace is wrong,
+                    // so recover the value and report the mismatch rather than drop data.
+                    None => match self.schema.find_enum_value_any_ns(local) {
+                        Some(v) => {
+                            let correct = self.schema.namespace(self.schema.enum_value(v).ns).iri;
+                            self.diag(
+                                Diagnostic::warning(
+                                    Rule::InvalidValue,
+                                    format!(
+                                        "enumeration literal {local} is written in namespace \
+                                         {ns}# but is declared in {correct}; value recovered"
+                                    ),
+                                )
+                                .with_attribute(def.name)
+                                .with_object(obj.mrid().canonical()),
+                                line,
+                            );
+                            Value::Enum(v)
                         }
-                    }
-                    None => {
-                        self.diag(
-                            Diagnostic::error(
-                                Rule::InvalidValue,
-                                format!("enumeration value {res:?} is not an IRI"),
-                            )
-                            .with_attribute(def.name),
-                            line,
-                        );
-                        return;
-                    }
+                        None => {
+                            self.diag(
+                                Diagnostic::error(
+                                    Rule::InvalidValue,
+                                    format!("unknown enumeration literal {res:?}"),
+                                )
+                                .with_attribute(def.name)
+                                .with_object(obj.mrid().canonical()),
+                                line,
+                            );
+                            return;
+                        }
+                    },
                 }
             }
             _ => Value::Reference(Mrid::parse(res)),
@@ -854,7 +876,7 @@ impl<'a> Parser<'a> {
         object: &mut Option<Object>,
         header: &mut Option<ModelHeader>,
         difference: &mut Option<DifferenceModel>,
-        _diff_subject: &Option<(Mrid, Option<String>)>,
+        _diff_subject: &Option<(Mrid, Option<QualifiedName>)>,
         _forward: bool,
         line: Option<u64>,
     ) {
@@ -986,7 +1008,7 @@ enum TextTarget {
     /// A difference-model statement.
     Statement {
         subject: Mrid,
-        class: Option<String>,
+        class: Option<QualifiedName>,
         ns: String,
         local: String,
         forward: bool,

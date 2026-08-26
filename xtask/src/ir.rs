@@ -11,7 +11,6 @@
 
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 use crate::rdfs;
 
@@ -51,6 +50,9 @@ pub struct Profile {
     /// `http://iec.ch/TC57/ns/CIM/CoreEquipment-EU/3.0`.
     pub version_iri: String,
     pub title: String,
+    /// Further IRIs that also denote this profile when read.
+    pub aliases: Vec<String>,
+    /// RDFS file this profile was parsed from.
     pub source_file: String,
 }
 
@@ -275,10 +277,10 @@ impl Schema {
 // Building the IR
 // ---------------------------------------------------------------------------
 
-/// A profile's RDFS file paired with the keyword to use if the file omits `dcat:keyword`.
+/// A profile's RDFS file together with how to interpret it.
 pub struct ProfileSource {
     pub path: std::path::PathBuf,
-    pub fallback_keyword: String,
+    pub spec: &'static crate::vintage::ProfileSpec,
 }
 
 pub fn build(vintage: &str, sources: &[ProfileSource]) -> Result<Schema> {
@@ -296,12 +298,34 @@ pub fn build(vintage: &str, sources: &[ProfileSource]) -> Result<Schema> {
     };
 
     // Pass 1: parse every profile document and register the profile itself.
-    let mut docs = Vec::new();
+    //
+    // Several profiles may share one file — CGMES 2.4.15 keeps Equipment, Operation and
+    // ShortCircuit in a single vocabulary — so documents are cached by path.
+    let mut cache: BTreeMap<std::path::PathBuf, std::rc::Rc<rdfs::Document>> = BTreeMap::new();
+    let mut docs: Vec<std::rc::Rc<rdfs::Document>> = Vec::new();
     for src in sources {
-        let doc = rdfs::parse_file(&src.path)?;
+        let doc = match cache.get(&src.path) {
+            Some(d) => d.clone(),
+            None => {
+                let d = std::rc::Rc::new(rdfs::parse_file(&src.path)?);
+                cache.insert(src.path.clone(), d.clone());
+                d
+            }
+        };
         let profile = extract_profile(&doc, src)?;
         schema.profiles.push(profile);
         docs.push(doc);
+    }
+
+    // Stereotypes claimed by any profile drawn from a given file. A profile that claims
+    // none takes whatever its siblings leave, which is how the Equipment core is
+    // separated from the Operation and ShortCircuit extensions sharing its vocabulary.
+    let mut claimed: BTreeMap<&std::path::Path, BTreeSet<&str>> = BTreeMap::new();
+    for src in sources {
+        let e = claimed.entry(src.path.as_path()).or_default();
+        for st in src.spec.stereotypes {
+            e.insert(*st);
+        }
     }
 
     // Pass 2: classify every description. Enumerations and datatypes must be known
@@ -318,17 +342,48 @@ pub fn build(vintage: &str, sources: &[ProfileSource]) -> Result<Schema> {
         }
     }
 
+    let filters: Vec<StereotypeFilter> = sources
+        .iter()
+        .map(|src| StereotypeFilter {
+            claims: src.spec.stereotypes,
+            siblings_claim: claimed.get(src.path.as_path()).cloned().unwrap_or_default(),
+        })
+        .collect();
+
     for (pi, doc) in docs.iter().enumerate() {
         let bit: ProfileMask = 1 << pi;
-        collect_types(&mut schema, doc, bit, &enum_locals)?;
+        collect_types(&mut schema, doc, bit, &enum_locals, &filters[pi])?;
     }
     for (pi, doc) in docs.iter().enumerate() {
         let bit: ProfileMask = 1 << pi;
-        collect_attributes(&mut schema, doc, bit)?;
+        collect_attributes(&mut schema, doc, bit, &filters[pi])?;
     }
 
     finish(&mut schema);
     Ok(schema)
+}
+
+/// Decides whether an attribute belongs to a profile that shares its vocabulary file.
+struct StereotypeFilter {
+    /// Stereotypes this profile claims. Empty means "whatever siblings do not claim".
+    claims: &'static [&'static str],
+    /// Every stereotype claimed by any profile drawn from the same file.
+    siblings_claim: BTreeSet<&'static str>,
+}
+
+impl StereotypeFilter {
+    fn accepts(&self, d: &rdfs::Description) -> bool {
+        if self.siblings_claim.is_empty() {
+            return true;
+        }
+        let has = |name: &str| stereotypes(d).any(|s| s == name);
+        if self.claims.is_empty() {
+            // The residual profile: everything no sibling claimed.
+            !self.siblings_claim.iter().any(|s| has(s))
+        } else {
+            self.claims.iter().any(|s| has(s))
+        }
+    }
 }
 
 fn stereotypes(d: &rdfs::Description) -> impl Iterator<Item = &str> {
@@ -354,30 +409,42 @@ fn extract_profile(doc: &rdfs::Document, src: &ProfileSource) -> Result<Profile>
         .map(|f| f.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    let Some(o) = ontology else {
-        return Ok(Profile {
-            keyword: src.fallback_keyword.clone(),
-            version_iri: String::new(),
-            title: src.fallback_keyword.clone(),
-            source_file: file,
-        });
+    // The spec is authoritative; the ontology block fills in what it leaves blank, which
+    // is how CGMES 3.0 vocabularies describe themselves.
+    let from_ontology = |predicate: &str| {
+        ontology
+            .and_then(|o| o.resource(predicate))
+            .map(str::to_owned)
     };
-
-    Ok(Profile {
-        keyword: o
-            .literal(&format!("{DCAT}keyword"))
+    let literal = |predicate: &str| {
+        ontology
+            .and_then(|o| o.literal(predicate))
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| src.fallback_keyword.clone()),
-        version_iri: o
-            .resource(&format!("{OWL}versionIRI"))
-            .unwrap_or_default()
-            .to_owned(),
-        title: o
-            .literal(&format!("{DCTERMS}title"))
-            .unwrap_or(&src.fallback_keyword)
-            .trim()
-            .to_owned(),
+    };
+
+    let version_iri = if src.spec.version_iri.is_empty() {
+        from_ontology(&format!("{OWL}versionIRI")).unwrap_or_default()
+    } else {
+        src.spec.version_iri.to_owned()
+    };
+    if version_iri.is_empty() {
+        bail!(
+            "profile {} ({file}) has no version IRI: the vocabulary declares none and the \
+             vintage does not state one",
+            src.spec.keyword
+        );
+    }
+
+    let keyword = literal(&format!("{DCAT}keyword"))
+        .filter(|_| src.spec.stereotypes.is_empty())
+        .unwrap_or_else(|| src.spec.keyword.to_owned());
+
+    Ok(Profile {
+        keyword,
+        version_iri,
+        title: literal(&format!("{DCTERMS}title")).unwrap_or_else(|| src.spec.title.to_owned()),
+        aliases: src.spec.aliases.iter().map(|s| (*s).to_owned()).collect(),
         source_file: file,
     })
 }
@@ -388,6 +455,7 @@ fn collect_types(
     doc: &rdfs::Document,
     bit: ProfileMask,
     enum_locals: &BTreeSet<String>,
+    filter: &StereotypeFilter,
 ) -> Result<()> {
     for d in &doc.descriptions {
         let is_class = d.resources(&rdf("type")).any(|t| t == rdfs("Class"));
@@ -437,6 +505,12 @@ fn collect_types(
                 t.comment = comment;
             }
         } else {
+            // Only classes are filtered: enumerations and datatypes are shared by every
+            // profile drawn from the file, since an enumeration used by a ShortCircuit
+            // attribute is just as available there as in the core.
+            if !filter.accepts(d) {
+                continue;
+            }
             let parent = d
                 .resource(&rdfs("subClassOf"))
                 .and_then(|p| Name::from_iri(p).ok());
@@ -462,14 +536,26 @@ fn collect_types(
     }
 
     // Enumeration values are typed by their enumeration class: `rdf:type` points at it.
+    //
+    // The `enum` stereotype is *not* a reliable signal — CGMES 2.4.15 vocabularies omit
+    // it entirely and rely on `rdf:type` alone — so the type edge is what is followed.
     for d in &doc.descriptions {
         let Ok(name) = Name::from_iri(&d.iri) else {
             continue;
         };
         let Some(owner) = name.owner() else { continue };
-        if !stereotypes(d).any(|s| s == "enum") {
+
+        let typed_as_enum = d.resources(&rdf("type")).any(|t| {
+            Name::from_iri(t).is_ok_and(|tn| {
+                tn.local == owner
+                    && (schema.enums.contains_key(&tn)
+                        || schema.enums.keys().any(|k| k.local == tn.local))
+            })
+        });
+        if !typed_as_enum {
             continue;
         }
+
         let owner_name = Name {
             ns: name.ns.clone(),
             local: owner.to_owned(),
@@ -501,10 +587,18 @@ fn collect_types(
 }
 
 /// Attach attributes and associations to their owning class or datatype.
-fn collect_attributes(schema: &mut Schema, doc: &rdfs::Document, bit: ProfileMask) -> Result<()> {
+fn collect_attributes(
+    schema: &mut Schema,
+    doc: &rdfs::Document,
+    bit: ProfileMask,
+    filter: &StereotypeFilter,
+) -> Result<()> {
     for d in &doc.descriptions {
         let is_prop = d.resources(&rdf("type")).any(|t| t == rdf("Property"));
         if !is_prop {
+            continue;
+        }
+        if !filter.accepts(d) {
             continue;
         }
         let Ok(name) = Name::from_iri(&d.iri) else {
@@ -706,33 +800,6 @@ fn well_known_prefix(ns: &str) -> Option<String> {
         }
         .to_owned(),
     )
-}
-
-pub fn discover_profiles(dir: &Path, pattern_strip: &[&str]) -> Result<Vec<ProfileSource>> {
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(dir)
-        .with_context(|| format!("listing RDFS directory {}", dir.display()))?
-    {
-        let path = entry?.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("rdf") {
-            continue;
-        }
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .to_owned();
-        let mut keyword = stem.clone();
-        for p in pattern_strip {
-            keyword = keyword.replace(p, "");
-        }
-        out.push(ProfileSource {
-            path,
-            fallback_keyword: keyword,
-        });
-    }
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(out)
 }
 
 #[cfg(test)]
