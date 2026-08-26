@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = ["crates/cim", "xtask"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hupe1980/cim-rs"
+authors = ["Frank Hübner <hupe@huebner-frank.de>"]
+
+[workspace.dependencies]
+quick-xml = "0.37"
+anyhow = "1"

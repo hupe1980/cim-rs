@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # The published crate must build and pass its own tests without the standards
+  # artifacts present, since a fresh clone has no `specs/` directory.
+  build:
+    name: build & unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-features --all-targets
+      - name: Tests without the standards corpus
+        run: cargo test --workspace --all-features
+      - name: Documentation
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # Full conformance: fetch the published ENTSO-E artifacts and check the committed
+  # generated sources still match them, then run the corpus-backed tests.
+  conformance:
+    name: conformance against published models
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache downloaded standards artifacts
+        uses: actions/cache@v4
+        with:
+          path: specs
+          key: specs-${{ hashFiles('scripts/fetch-specs.sh') }}
+      - name: Fetch standards artifacts
+        run: scripts/fetch-specs.sh
+      - name: Generated sources match the RDFS vocabularies
+        run: cargo xtask codegen --check
+      - name: Conformity corpus tests
+        run: cargo test --workspace --all-features --release
+
+  msrv:
+    name: minimum supported Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p cim --all-features
+
+  deny:
+    name: licenses & advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

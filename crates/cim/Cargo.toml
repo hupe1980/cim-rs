@@ -1,0 +1,23 @@
+[package]
+name = "cim"
+version = "0.1.0"
+description = "IEC Common Information Model (CIM/CGMES) for power systems: typed model, CIM/XML I/O, profile-aware validation"
+keywords = ["cim", "cgmes", "iec61970", "power-systems", "grid"]
+categories = ["science", "parser-implementations", "encoding"]
+readme = "README.md"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+quick-xml.workspace = true
+zip = { version = "2", optional = true, default-features = false, features = ["deflate"] }
+
+[features]
+default = []
+zip = ["dep:zip"]
+
+[package.metadata.docs.rs]
+all-features = true
