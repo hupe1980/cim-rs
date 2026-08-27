@@ -40,7 +40,15 @@ fn cims(local: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Profile membership as a bitmask over [`Schema::profiles`].
-pub type ProfileMask = u32;
+///
+/// The same width as the runtime `cim_rs::schema::ProfileMask` it is emitted into, and it
+/// has to stay that way: this is shifted by profile index, and Rust masks an over-wide shift
+/// in release builds rather than failing, which would alias two profiles onto one bit in the
+/// tables everything else is derived from.
+pub type ProfileMask = u64;
+
+/// How many profiles one vintage may hold, which is [`ProfileMask`]'s width.
+pub const MAX_PROFILES: usize = ProfileMask::BITS as usize;
 
 #[derive(Debug, Clone)]
 pub struct Profile {
@@ -377,6 +385,19 @@ pub fn build(vintage: &str, sources: &[ProfileSource]) -> Result<Schema> {
             siblings_claim: claimed.get(src.path.as_path()).cloned().unwrap_or_default(),
         })
         .collect();
+
+    // Checked rather than assumed, for the reason `ProfileId::mask` states at runtime: an
+    // over-wide shift is masked in release builds, so profile 64 would take profile 0's bit
+    // and merge the two everywhere provenance is consulted.
+    if docs.len() > MAX_PROFILES {
+        bail!(
+            "vintage {} has {} profiles but ProfileMask is {} bits wide; widen \
+             `ir::ProfileMask` and `cim_rs::schema::ProfileMask` together",
+            vintage,
+            docs.len(),
+            MAX_PROFILES
+        );
+    }
 
     for (pi, doc) in docs.iter().enumerate() {
         let bit: ProfileMask = 1 << pi;
@@ -894,6 +915,30 @@ fn well_known_prefix(ns: &str) -> Option<String> {
         }
         .to_owned(),
     )
+}
+
+#[cfg(test)]
+mod bound_tests {
+    use super::*;
+
+    /// The generator's profile bound, pinned where it can be seen next to the shift.
+    ///
+    /// `ir::ProfileMask` and `cim_rs::schema::ProfileMask` have to move together: the
+    /// generator shifts by profile index into the first and emits the result into the
+    /// second. `xtask` deliberately does not depend on the crate it generates, so the two
+    /// cannot be compared by the compiler — this states the number both are expected to be.
+    #[test]
+    fn the_profile_bound_matches_the_runtime_mask() {
+        assert_eq!(MAX_PROFILES, 64);
+        for v in crate::vintage::VINTAGES {
+            assert!(
+                v.profiles.len() <= MAX_PROFILES,
+                "{} declares {} profiles",
+                v.key,
+                v.profiles.len()
+            );
+        }
+    }
 }
 
 #[cfg(test)]

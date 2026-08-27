@@ -22,11 +22,6 @@ pub fn emit(schemas: &[Schema], out_dir: &Path, check: bool) -> Result<()> {
     }
     planned.push((out_dir.join("mod.rs"), rustfmt(&emit_root(schemas))));
 
-    // There used to be a third thing generated here: a copy of the repository README, kept
-    // as the crate's own front page because the crate lived one directory down and the two
-    // files could drift. The crate is now the root package, so `readme = "README.md"` names
-    // the same file GitHub shows and there is nothing to synchronise.
-
     if check {
         let stale: Vec<String> = planned
             .iter()
@@ -115,13 +110,31 @@ fn emit_root(schemas: &[Schema]) -> String {
             v = s.vintage
         );
     }
+    // The registry of what this build actually contains. Generated rather than
+    // hand-written because which vintages exist is exactly what the generator knows, and a
+    // hand-maintained list would be one regeneration away from being wrong.
+    let mut entries = String::new();
+    for s in schemas {
+        let _ = writeln!(
+            entries,
+            "    #[cfg(feature = \"{v}\")]\n    {v}::SCHEMA,",
+            v = s.vintage
+        );
+    }
     format!(
         "{HEADER}
 //! Generated CIM schema vintages.
 //!
 //! Each vintage is behind a feature of the same name.
 
-{mods}"
+{mods}
+/// Every schema vintage compiled into this build, in feature order.
+///
+/// Empty when no vintage feature is enabled. [`Schema::detect`](crate::schema::Schema::detect)
+/// searches this to identify a document from the namespaces it declares.
+pub static VINTAGES: &[&crate::schema::Schema] = &[
+{entries}];
+"
     )
 }
 

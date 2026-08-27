@@ -77,10 +77,9 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy -p cim-rs ${{ matrix.features }} --all-targets
-      # `--all-targets` does not build doctests, so the README and the guide were the one
-      # part of the crate this matrix never compiled — and they were the part that broke,
-      # since their examples name a vintage. Running them here is what makes the matrix
-      # cover the whole crate rather than nearly all of it.
+      # `--all-targets` does not build doctests, so without this the matrix would cover
+      # every target except the documentation — whose examples name a vintage, and a vintage
+      # is a feature.
       - run: cargo test -p cim-rs ${{ matrix.features }} --doc
 
   # Full conformance: fetch the published ENTSO-E artifacts, check the committed
@@ -108,10 +107,8 @@ jobs:
       # computed change set is a document an XML parser that is not ours accepts, and
       # `export` that a re-exported model set is too.
       #
-      # `diff` runs *both* ways on purpose. Driving it only with `--out` is what let the
-      # redirected form — the one the README shows — go on appending a diagnostics report to
-      # the document it had just written to the same stream. `tests/cli.rs` pins the
-      # separation on a model built for it; this pins it on a published one.
+      # `diff` runs both ways: with `--out` the document is a file, and redirected it is
+      # stdout, which must then carry the document and nothing else.
       - name: Command line against a published model set
         run: |
           root=specs/test-models/cas-3.0.3/CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0
@@ -221,14 +218,10 @@ jobs:
           archive=specs/test-models/cas-2.0/MicroGrid/BaseCase_BC/CGMES_v2.4.15_MicroGridTestConfiguration_BC_Assembled_v2.zip
           cargo xtask crossvalidate "$archive" --vintage cgmes2
 
-  # Portability, as a build rather than as a claim. "Pure Rust, no C dependencies, usable
-  # from WASM" is one of the crate's stated goals and was the only one nothing checked — and
-  # it is exactly the kind of property a single new dependency takes away silently.
-  #
-  # `wasm32-unknown-unknown` rather than `wasi`, because it is the strict one: it has no
-  # filesystem, so it is what a browser or an edge runtime actually offers. The library
-  # compiles for it; `Dataset::load` and friends are there for hosts that do have files, and
-  # the reader takes any `BufRead`, so a WASM caller feeds it bytes it already holds.
+  # Portability as a build rather than a claim — the kind of property one new dependency
+  # takes away silently. `wasm32-unknown-unknown` rather than `wasi` because it is the strict
+  # one: no filesystem, which is what a browser or edge runtime offers. The reader takes any
+  # `BufRead`, so a WASM caller feeds it bytes it already holds.
   wasm:
     name: wasm32 target builds
     runs-on: ubuntu-latest

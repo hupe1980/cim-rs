@@ -39,6 +39,14 @@ pub enum Error {
         left: &'static str,
         right: &'static str,
     },
+    /// No file under the given path declares a CIM vocabulary this build recognises.
+    ///
+    /// Either the input is not CIM/XML, or it is a vintage this build has no feature for.
+    UnknownVintage {
+        path: String,
+        /// The vintages that *are* compiled in.
+        known: Vec<&'static str>,
+    },
     /// A zip archive could not be read.
     #[cfg(feature = "zip")]
     Zip(String),
@@ -65,6 +73,11 @@ impl fmt::Display for Error {
                 f,
                 "cannot combine a {left} model with a {right} one: class and attribute \
                  identifiers belong to one vintage's tables"
+            ),
+            Error::UnknownVintage { path, known } => write!(
+                f,
+                "no CIM vintage recognised in {path}: not a CIM/XML input, or a vocabulary \
+                 this build has no feature for (it has {known:?})"
             ),
             #[cfg(feature = "zip")]
             Error::Zip(m) => write!(f, "zip archive error: {m}"),
@@ -177,10 +190,16 @@ pub enum Rule {
     /// and forbids a numeric character reference to it as well, so there is no way to
     /// write such a character at all. A document containing one is rejected by every
     /// conforming parser at the offending byte. `quick-xml` does not enforce the
-    /// production, so a mis-encoded or corrupted source file used to pass through this
-    /// crate unremarked and come out unreadable — the reader now strips the character and
-    /// reports it, and this rule also fires for a value put in through the public API.
+    /// production, so nothing else catches one arriving from a mis-encoded or corrupted
+    /// source file. The reader strips the character and reports it; this rule also fires
+    /// for a value put in through the public API.
     IllegalXmlCharacter,
+    /// The document is written against a different schema vintage than the one reading it.
+    ///
+    /// CIM/XML declares its vocabulary — `…/CIM100#` for CGMES 3.0, `…/CIM-schema-cim16#`
+    /// for 2.4.15 — so this is knowable from the root element. Without it a vintage mismatch
+    /// surfaces only as one `CIM0001` per element and a model with nothing in it.
+    WrongVintage,
     /// An identifier has no valid RDF/XML serialization.
     ///
     /// `rdf:ID` is an XML `NCName` and `rdf:about` is an IRI reference. Every UUID
@@ -216,6 +235,7 @@ impl Rule {
             Rule::ConflictingValue => "CIM0018",
             Rule::IllegalXmlCharacter => "CIM0019",
             Rule::UnserializableIdentifier => "CIM0020",
+            Rule::WrongVintage => "CIM0021",
         }
     }
 
@@ -241,6 +261,7 @@ impl Rule {
         Rule::ConflictingValue,
         Rule::IllegalXmlCharacter,
         Rule::UnserializableIdentifier,
+        Rule::WrongVintage,
     ];
 }
 

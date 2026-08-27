@@ -31,6 +31,30 @@ Vintages are independent modules, so enabling only the one you need keeps compil
 binary size down. Both can be on at once — identifiers are per-vintage and cannot be mixed
 by accident.
 
+**You do not have to know which vintage a file is.** CIM/XML declares its vocabulary in the
+document, so `Dataset::open` reads it off the root element:
+
+```rust,no_run
+fn main() -> cim_rs::Result<()> {
+    // A directory, a zip archive or a single file — the vintage comes from the document.
+    let grid = cim_rs::Dataset::open("MicroGrid-BE")?;
+    println!("{} objects, read as {}", grid.len(), grid.schema().vintage);
+    Ok(())
+}
+```
+
+Name the vintage yourself with `Dataset::load_dir(SCHEMA, …)` when a program only ever
+handles one of them — that is a statement of intent, and it is what the rest of this guide
+does. [`reader::sniff`] answers the question alone if you want the schema without the load.
+
+Getting it wrong is quiet rather than loud: a CGMES 2.4.15 model read against the CGMES 3.0
+tables resolves no class at all, so it yields an *empty* model instead of an error. That is
+why a mismatch is reported as `CIM0021` at the root element rather than left to be inferred
+from one "unknown class" warning per element. The `cim` command line detects by default;
+`--vintage` overrides it.
+
+[`reader::sniff`]: https://docs.rs/cim-rs/latest/cim_rs/reader/fn.sniff.html
+
 ## Load a model
 
 A CGMES model is not a file. It is a **set** of profile files that describe the same

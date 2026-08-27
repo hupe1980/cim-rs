@@ -74,8 +74,8 @@ macro_rules! require_corpus {
 /// How many objects of each class a document holds, and how each is identified.
 ///
 /// The unit of comparison for "did this export reproduce its input". A projection of the
-/// assembled model cannot see the difference between `rdf:ID` and `rdf:about`, or notice
-/// that an object landed in the wrong file — and both were wrong before this existed.
+/// assembled model can see neither the difference between `rdf:ID` and `rdf:about` nor an
+/// object landing in the wrong file.
 pub fn element_census(text: &str) -> std::collections::BTreeMap<(String, &'static str), usize> {
     let mut out = std::collections::BTreeMap::new();
     for (i, _) in text.match_indices('<') {
@@ -109,16 +109,11 @@ pub fn element_census(text: &str) -> std::collections::BTreeMap<(String, &'stati
 /// Every object identifier in a document, exactly as it is spelled.
 ///
 /// The census above counts objects by class and by *identity style* — `rdf:ID` versus
-/// `rdf:about` — and never looks at the identifier text. That was enough to catch an export
-/// putting objects in the wrong file or naming the wrong class, and it is structurally
-/// blind to an identifier being *rewritten*: the count and the style are unchanged when
-/// `_1C405140-0F45-…` comes back as `_1c405140-0f45-…`.
-///
-/// Which is what happened. `Mrid` remembered whether a UUID had been hyphenated but not how
-/// it was cased, and the published CGMES 2.4.15 boundary set writes mixed-case hex — so
-/// every identifier in that file changed on export, the census saw nothing, and the
-/// round-trip saw nothing either because identity is the sixteen bytes. PowSyBl saw it at
-/// once, because an IIDM identifier is the mRID string.
+/// `rdf:about` — and never looks at the identifier text, which makes it structurally blind
+/// to an identifier being *rewritten*: the count and the style are unchanged when
+/// `_1C405140-0F45-…` comes back as `_1c405140-0f45-…`. So is the round-trip, where identity
+/// is the sixteen bytes by construction. The published CGMES 2.4.15 boundary set writes
+/// mixed-case hex, so this is not hypothetical.
 ///
 /// Header identifiers are excluded deliberately: `md:FullModel rdf:about="urn:uuid:_<uuid>"`
 /// appears in the published 2.4.15 files and is not a valid URN — RFC 8141 gives the uuid
@@ -147,31 +142,15 @@ pub fn identifier_census(text: &str) -> std::collections::BTreeSet<String> {
 ///
 /// Returns `Err` with the first violation found.
 ///
-/// This exists because the crate's own reader is deliberately tolerant, so re-reading what
-/// the writer produced cannot tell whether the output is *valid XML* — only whether this
-/// crate can read it back. It could not: every file the writer emitted carried
-/// `xmlns:md` twice, because the schema's namespace table already contains the model
-/// description namespace and the header wrote it again. `quick_xml` with attribute checks
-/// off does not notice a duplicate attribute; every conforming XML parser rejects the
-/// document outright, so no other tool in the CGMES ecosystem could read the output at all.
+/// The crate's own reader is deliberately tolerant, so re-reading what the writer produced
+/// says only that this crate can read it back — nothing about whether anyone else's parser
+/// will. The checks here are the ones a CIM consumer's parser applies: balanced and
+/// correctly nested elements, no duplicate attribute, every prefix bound before use, and
+/// every character inside XML 1.0's `Char` production.
 ///
-/// The checks are exactly the well-formedness constraints a CIM consumer's parser applies:
-/// balanced and correctly nested elements, no duplicate attribute on an element, every
-/// prefix bound before use, and every character inside XML 1.0's `Char` production.
-///
-/// # The gate had the reader's blind spot
-///
-/// The last of those was added after the same lesson repeated one level down. This check
-/// exists because the crate's own *reader* is too tolerant to prove anything about the
-/// output — but it was built on `quick-xml`, the same library that reader uses, and
-/// inherited one of its permissions: `quick-xml` does not enforce the `Char` production in
-/// either direction. So a document carrying a raw `NUL` — which a mis-encoded or corrupted
-/// source file supplies, and which travelled through the crate unremarked — passed this
-/// gate while `xmllint`, Xerces and `expat` all refused it at the offending byte.
-///
-/// Checking the character range here is what makes "proved by a parser that is not ours"
-/// true rather than nearly true: the constraint is now tested directly, by this function,
-/// rather than delegated to a parser that shares the reader's tolerances.
+/// The last is tested by this function directly rather than delegated to `quick-xml`, which
+/// the reader also uses and which enforces the `Char` production in neither direction. A
+/// checker built on the library it is checking inherits that library's permissions.
 pub fn check_well_formed(text: &str) -> Result<(), String> {
     use quick_xml::NsReader;
     use quick_xml::events::Event;
@@ -216,7 +195,7 @@ pub fn check_well_formed(text: &str) -> Result<(), String> {
         }
 
         // `with_checks(true)` is what reports a duplicate attribute; it is off on the
-        // reader's hot path, which is precisely why the defect survived so long.
+        // reader's hot path, so only this sees one.
         let mut seen: Vec<Vec<u8>> = Vec::new();
         for attr in start.attributes().with_checks(true) {
             let attr = attr.map_err(|e| {

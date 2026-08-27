@@ -545,6 +545,52 @@ impl Schema {
         provenance == 0 || self.attr(attr).used_in & provenance != 0
     }
 
+    /// How strongly a document declaring `namespaces` looks like this vintage.
+    ///
+    /// The number of this vintage's classes that live in namespaces the document declares.
+    ///
+    /// Weighted by class count rather than by namespace, because every namespace a schema
+    /// knows holds at least one class — the 61970-552 header vocabulary puts classes in
+    /// `md`, `dm` and even `rdf` — so presence alone discriminates nothing. Bulk does:
+    /// `CIM100#` holds 436 classes against `rdf`'s one, so a CGMES 2.4.15 document scores
+    /// 400 for 2.4.15 and 3 for 3.0.
+    pub fn match_score<'a>(&self, namespaces: impl IntoIterator<Item = &'a str>) -> usize {
+        let declared: Vec<&str> = namespaces.into_iter().collect();
+        let wanted: Vec<NsId> = self
+            .namespaces
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| declared.contains(&n.iri))
+            .map(|(i, _)| NsId(i as u16))
+            .collect();
+        self.classes
+            .iter()
+            .filter(|c| wanted.contains(&c.ns))
+            .count()
+    }
+
+    /// The compiled-in vintage a document declaring `namespaces` belongs to.
+    ///
+    /// CIM/XML names its vocabulary in the document — `xmlns:cim="…/CIM100#"` for CGMES 3.0,
+    /// `"…/CIM-schema-cim16#"` for 2.4.15 — so the caller never has to guess, and guessing
+    /// wrong is expensive: reading a 2.4.15 file against the CGMES 3.0 tables resolves no
+    /// class at all and yields an empty model with one "unknown class" warning per element.
+    ///
+    /// Returns `None` when nothing in the document points at any compiled-in vintage, which
+    /// is the honest answer for a build without the matching feature.
+    ///
+    /// See [`reader::sniff`](crate::reader::sniff), which answers this from a document's
+    /// root element without parsing the rest.
+    pub fn detect<'a>(namespaces: impl IntoIterator<Item = &'a str>) -> Option<&'static Schema> {
+        let declared: Vec<&str> = namespaces.into_iter().collect();
+        crate::VINTAGES
+            .iter()
+            .map(|s| (s.match_score(declared.iter().copied()), *s))
+            .filter(|(score, _)| *score > 0)
+            .max_by_key(|(score, _)| *score)
+            .map(|(_, s)| s)
+    }
+
     /// Every concrete class, useful for tooling that enumerates the model.
     pub fn concrete_classes(&self) -> impl Iterator<Item = ClassId> + '_ {
         self.classes

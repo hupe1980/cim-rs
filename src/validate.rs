@@ -645,9 +645,8 @@ fn check_profile_reach(dataset: &Dataset, report: &mut Report) {
             .profiles
             .iter()
             .enumerate()
-            // `ProfileId::mask` rather than a bare shift: Rust masks an over-wide shift in
-            // release builds, so a schema with more profiles than `ProfileMask` has bits
-            // would silently name the wrong ones here instead of failing.
+            // `ProfileId::mask` rather than a bare shift, which Rust masks in release
+            // builds: an over-wide shift would name the wrong profile instead of failing.
             .filter(|(i, _)| def.used_in & ProfileId(*i as u16).mask() != 0)
             .map(|(_, p)| p.keyword)
             .collect();

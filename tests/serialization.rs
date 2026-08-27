@@ -1267,10 +1267,7 @@ fn a_self_closing_header_is_still_registered_with_the_dataset() {
 // What the output syntaxes can represent
 //
 // Two constraints the object model cannot express, so nothing upstream of serialization
-// enforces them. Both were found by handing this crate's output to a parser that is not
-// this crate's, which is the same way `xmlns:md` was found — and the first of them had
-// survived that check, because the check was built on the same library as the reader and
-// inherited its tolerance.
+// enforces them and no corpus of conforming files can demonstrate them.
 // ---------------------------------------------------------------------------
 
 /// A character XML cannot represent is refused where it enters, not discovered on export.

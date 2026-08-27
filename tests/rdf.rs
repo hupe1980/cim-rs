@@ -413,16 +413,12 @@ fn a_profile_graph_holds_only_what_that_profile_describes() {
     assert!(all.contains("\"BR\""), "{all}");
 }
 
-/// A profile's graph carries the headers of the files that serve that profile, and no
-/// others — for the same reason it carries only that profile's objects.
+/// A profile's graph carries the headers of the files serving that profile and no others,
+/// for the same reason it carries only that profile's objects.
 ///
-/// Getting this wrong is invisible to every other check here. The graph stays valid
-/// N-Triples, every literal keeps its type, and the extra subjects are `md:FullModel`s that
-/// the header shapes happily accept — so the export looked right while asserting, in the
-/// Steady State Hypothesis graph, that a model declares the Equipment profile. On a
-/// published MicroGrid set that was twenty-seven headers in every one of eleven graphs, and
-/// it made a profile the model carries *no data at all* for come out as several hundred
-/// lines, which is what let `cargo xtask shacl` report an empty graph as conformant.
+/// Nothing else here can see this: the graph stays valid N-Triples, every literal keeps its
+/// type, and the extra subjects are `md:FullModel`s the header shapes accept — while the SSH
+/// graph asserts that the model declares the Equipment profile.
 #[test]
 fn a_profile_graph_carries_only_the_headers_of_files_serving_it() {
     let ds = two_file_model();
@@ -455,8 +451,8 @@ fn a_profile_graph_carries_only_the_headers_of_files_serving_it() {
     assert!(all.contains("SteadyStateHypothesis-EU"), "{all}");
 }
 
-/// A graph of nothing but headers is not an export of a profile, and saying so is what
-/// keeps a SHACL run from passing on an empty graph.
+/// A graph of nothing but headers is not an export of a profile, which is what keeps a
+/// SHACL run from passing on an empty one.
 #[test]
 fn a_profile_the_model_says_nothing_about_has_no_content() {
     let ds = two_file_model();

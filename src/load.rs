@@ -121,6 +121,44 @@ impl Dataset {
         Ok(ds)
     }
 
+    /// Load a model set, reading its vintage out of the files themselves.
+    ///
+    /// The call most programs want. `path` is a directory, a zip archive or a single
+    /// instance file; the schema comes from the first document's namespace declarations, so
+    /// the caller does not have to know — or hard-code — whether a model is CGMES 3.0 or
+    /// 2.4.15.
+    ///
+    /// Use [`Dataset::load_dir`] or [`Dataset::load`] to state the vintage explicitly, which
+    /// is what a program that only ever handles one of them should do.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnknownVintage`](crate::Error::UnknownVintage) when no file under `path`
+    /// declares a vocabulary this build
+    /// has a feature for — including when `path` holds no CIM input at all.
+    ///
+    // An example has to name a vintage only when it names a schema; this one does not, so
+    // it compiles under any feature set.
+    /// ```no_run
+    /// # fn main() -> cim_rs::Result<()> {
+    /// let grid = cim_rs::Dataset::open("MicroGrid-BE")?;
+    /// println!("{} objects", grid.len());
+    /// # Ok(()) }
+    /// ```
+    pub fn open(path: impl AsRef<Path>) -> Result<Dataset> {
+        let path = path.as_ref();
+        let files = instance_files(path);
+        let schema = files.iter().find_map(|f| detect_file(f)).ok_or_else(|| {
+            crate::error::Error::UnknownVintage {
+                path: path.display().to_string(),
+                known: crate::VINTAGES.iter().map(|s| s.vintage).collect(),
+            }
+        })?;
+        let mut ds = Dataset::new(schema);
+        ds.load_files(&files, &ReadOptions::lenient())?;
+        Ok(ds)
+    }
+
     /// Read only the headers of a set of files, without loading their objects.
     ///
     /// Useful for deciding what to load: headers declare profiles and dependencies.
@@ -526,10 +564,9 @@ impl Dataset {
 
             if header.kind == ModelKind::Difference {
                 // A change file holds statements, not objects, so the statements have to be
-                // found rather than the objects. By identifier first; failing that, by the
-                // document both were read from, which is what actually ties them together —
-                // a change set whose header carries no `rdf:about` has no identifier to
-                // match on, and skipping it would drop the file from the export entirely.
+                // matched to the header: by identifier, or failing that by the document both
+                // were read from — a `dm:DifferenceModel` with no `rdf:about` has no
+                // identifier to match on.
                 let diff = self
                     .differences()
                     .iter()
@@ -572,6 +609,30 @@ impl Dataset {
         }
         Ok(out)
     }
+}
+
+/// The schema vintage a file declares, or `None` if it cannot be read or is unrecognised.
+///
+/// A zip archive is opened for its first CIM/XML entry, since a model set often arrives as
+/// one. Unreadable is not an error here: [`Dataset::open`] moves on to the next file.
+pub fn detect_file(path: &Path) -> Option<&'static Schema> {
+    #[cfg(feature = "zip")]
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+    {
+        let file = File::open(path).ok()?;
+        let mut zip = zip::ZipArchive::new(BufReader::new(file)).ok()?;
+        let mut names: Vec<String> = (0..zip.len())
+            .filter_map(|i| zip.by_index(i).ok().map(|f| f.name().to_owned()))
+            .filter(|n| n.to_ascii_lowercase().ends_with(".xml"))
+            .collect();
+        names.sort();
+        let entry = zip.by_name(names.first()?).ok()?;
+        return crate::reader::sniff(BufReader::new(entry)).ok().flatten();
+    }
+    let file = File::open(path).ok()?;
+    crate::reader::sniff(BufReader::new(file)).ok().flatten()
 }
 
 /// Every CIM input under `path`, sorted so that a load is reproducible.
@@ -664,9 +725,9 @@ fn unique_name(name: String, used: &mut Vec<String>) -> String {
 ///
 /// `content` is the exporting dataset's [`Dataset::content_id`]. The model identifier is
 /// derived from it and from the profile, rather than left empty: IEC 61970-552 requires
-/// `md:FullModel rdf:about`, so a header without one is a document this crate's own
-/// validator rejects — which is what `save_profile` used to write. Deriving it keeps the
-/// export deterministic while still giving two different models different identifiers.
+/// `md:FullModel rdf:about`, so a header without one — or with the nil UUID — is a document
+/// this crate's own validator rejects. Deriving it keeps the export deterministic while
+/// still giving two different models different identifiers.
 ///
 /// `md:Model.created` and `md:Model.scenarioTime` are deliberately absent: both are facts
 /// about the exchange that only the caller knows, and inventing a timestamp would make an

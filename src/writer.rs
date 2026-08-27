@@ -126,9 +126,9 @@ where
     w.start_document(options)?;
     if let Some(h) = &options.header {
         // IEC 61970-552 requires `md:FullModel rdf:about`, and a header a caller built by
-        // hand may not have one. The nil UUID is what used to go out — a document this
-        // crate's own validator rejects — so the model's content identifier stands in:
-        // deterministic, distinct per model, and derived rather than invented.
+        // hand may not have one. The model's content identifier stands in: deterministic,
+        // distinct per model, and derived rather than invented — where the nil UUID would
+        // be a document this crate's own validator rejects.
         match h.id {
             Some(_) => w.header(h)?,
             None => {
@@ -236,14 +236,14 @@ pub fn object_has_content_in(schema: &Schema, obj: &Object, profiles: ProfileMas
 
 /// The prefix bindings of one output document.
 ///
-/// A document's `xmlns:` declarations have to satisfy two constraints that are easy to
-/// violate by writing them from several independent places, and both produce output that
-/// is not well-formed XML rather than output that is merely ugly:
+/// A document's `xmlns:` declarations have to satisfy two constraints that writing them
+/// from several independent places violates easily, and both produce output that is not
+/// well-formed XML rather than output that is merely ugly:
 ///
-/// * **Each prefix may be declared at most once on an element.** The schema's own
-///   namespace table already contains `md` and `dm`, so emitting them again for the header
-///   made every file this crate wrote a duplicate-attribute error. No CIM-tolerant reader
-///   notices — an XML parser rejects the document outright.
+/// * **Each prefix may be declared at most once on an element.** The schema's namespace
+///   table already contains `md` and `dm`, so emitting them again for the header is a
+///   duplicate attribute — which no CIM-tolerant reader notices and every XML parser
+///   rejects outright.
 /// * **A prefix must exist before it is used.** A header property read from a document
 ///   that bound the *default* namespace has no prefix at all, and `<:Model.x>` is not a
 ///   name.
@@ -792,11 +792,10 @@ fn escape_attr<W: Write>(out: &mut W, s: &str) -> Result<()> {
 /// The removal is the part that is not decoration. XML 1.0's `Char` production excludes
 /// most of the C0 range *and* forbids a numeric character reference to it, so a value
 /// carrying a NUL has no representation at all and a document containing one is refused by
-/// every conforming parser at that byte. `quick-xml` enforces neither end of this, so such
-/// a value used to travel from a mis-encoded source file straight through to output that
-/// nothing else could read. Dropping the character is the only alternative to writing an
-/// unreadable document; it is not silent, because [`Rule::IllegalXmlCharacter`] fires
-/// where the value enters and again for any value still holding one in the store.
+/// every conforming parser at that byte, and `quick-xml` enforces neither end of this.
+/// Dropping the character is the only alternative to writing an unreadable document; it is
+/// not silent, because [`Rule::IllegalXmlCharacter`] fires where the value enters and again
+/// for any value still holding one in the store.
 ///
 /// [`Rule::IllegalXmlCharacter`]: crate::Rule::IllegalXmlCharacter
 fn escape<W: Write>(out: &mut W, s: &str, rep: fn(u8) -> Option<&'static [u8]>) -> Result<()> {

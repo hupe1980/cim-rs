@@ -110,10 +110,8 @@ pub struct RdfOptions {
     /// Emit the loaded files' `md:FullModel` headers as resources.
     ///
     /// Restricted by [`RdfOptions::profiles`] exactly as the objects are: a graph for one
-    /// profile carries the headers of the files that *serve* that profile and no others,
-    /// because that is what the profile's instance file carries. Without the restriction an
-    /// SSH graph asserted the Equipment file's header — `md:Model.profile
-    /// ".../CoreEquipment-EU/3.0"` — which no SSH file ever says.
+    /// profile carries the headers of the files that *serve* it and no others, because that
+    /// is what the profile's instance file carries.
     pub headers: bool,
     /// Base IRI for identifiers that are not UUIDs.
     ///
@@ -211,15 +209,13 @@ fn header_serves(schema: &Schema, header: &ModelHeader, profiles: ProfileMask) -
 
 /// Whether an export restricted to `profiles` would describe any object at all.
 ///
-/// The predicate a caller needs to decide whether writing the graph is worth doing, and the
-/// one thing a *size* check cannot answer: a graph of nothing but headers is hundreds of
-/// lines long and describes no model. `cargo xtask shacl` used to guess from a line count
-/// and therefore reported a profile the model carries no data for as validated, which is a
-/// gate passing on an empty graph.
+/// Lets a caller distinguish "this profile is absent from the model" from "this profile
+/// conforms" — which a check on the graph's *size* cannot, since a graph of nothing but
+/// headers runs to hundreds of lines.
 ///
-/// Deliberately about objects rather than about headers. A file may declare Equipment,
-/// Operation and ShortCircuit and carry no Operation attribute at all; the Operation graph
-/// is then a header and nothing else, which is not an export of that profile.
+/// Deliberately about objects rather than headers: a file may declare Equipment, Operation
+/// and ShortCircuit and carry no Operation attribute at all, and a header on its own is not
+/// an export of that profile.
 pub fn has_content(dataset: &Dataset, profiles: ProfileMask) -> bool {
     let schema = dataset.schema();
     dataset

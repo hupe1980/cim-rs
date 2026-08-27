@@ -143,6 +143,52 @@ pub fn read_header<R: BufRead>(
     Ok(parser.run(input, None)?.header)
 }
 
+/// Identify which schema vintage a document is written against, reading only its root.
+///
+/// CIM/XML names its vocabulary in the document, so the vintage is a fact to be read rather
+/// than a parameter to be guessed. Returns `None` when no compiled-in vintage recognises the
+/// namespaces — a document this build has no feature for, or not a CIM/XML document at all.
+///
+/// ```no_run
+/// # fn main() -> cim_rs::Result<()> {
+/// let file = std::io::BufReader::new(std::fs::File::open("EQ.xml")?);
+/// let schema = cim_rs::reader::sniff(file)?.expect("a known CIM vintage");
+/// let mut ds = cim_rs::Dataset::new(schema);
+/// # Ok(()) }
+/// ```
+pub fn sniff<R: BufRead>(input: R) -> Result<Option<&'static Schema>> {
+    let mut reader = Reader::from_reader(input);
+    reader.config_mut().check_end_names = false;
+    let mut buf = Vec::new();
+    loop {
+        let ev = reader
+            .read_event_into(&mut buf)
+            .map_err(|e| Error::Xml(e.to_string()))?;
+        let e = match ev {
+            Event::Eof => return Ok(None),
+            Event::Start(e) | Event::Empty(e) => e,
+            _ => {
+                buf.clear();
+                continue;
+            }
+        };
+        // Producers occasionally wrap `rdf:RDF`, so keep looking rather than giving up on
+        // the first element — but only until something declares a namespace we know.
+        let mut iris: Vec<String> = Vec::new();
+        for attr in e.attributes().with_checks(false) {
+            let attr = attr?;
+            let key = attr.key.as_ref();
+            if key == b"xmlns" || key.starts_with(b"xmlns:") {
+                iris.push(String::from_utf8_lossy(&attr.value).into_owned());
+            }
+        }
+        if let Some(schema) = Schema::detect(iris.iter().map(String::as_str)) {
+            return Ok(Some(schema));
+        }
+        buf.clear();
+    }
+}
+
 /// Read a difference model document.
 pub fn read_difference<R: BufRead>(
     schema: &'static Schema,
@@ -509,6 +555,35 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Report, once, that this document belongs to a different schema vintage.
+    ///
+    /// The namespaces are in the document, so a mismatch is knowable at the root — where it
+    /// is one error, rather than one "unknown class" warning per element and a model with
+    /// nothing in it.
+    fn check_vintage(&mut self, pos: u64) {
+        let declared: Vec<&str> = self.ns.values().map(String::as_str).collect();
+        // Comparative, not absolute: the header vocabulary is shared, so every vintage
+        // scores something on every CIM/XML document. What matters is whether another one
+        // scores higher.
+        let Some(actual) = Schema::detect(declared.iter().copied()) else {
+            return;
+        };
+        if std::ptr::eq(actual, self.schema) {
+            return;
+        }
+        self.diag(
+            Diagnostic::error(
+                Rule::WrongVintage,
+                format!(
+                    "this document is {} and is being read as {}; nothing in it will \
+                     resolve. Use `{}::SCHEMA`, or `reader::sniff` to detect it",
+                    actual.vintage, self.schema.vintage, actual.vintage
+                ),
+            ),
+            pos,
+        );
+    }
+
     /// Register the just-parsed header with the dataset and adopt what it declares.
     fn register_header(&mut self, st: &mut State, dataset: &mut Option<&mut Dataset>) {
         let Some(h) = st.header.as_ref() else { return };
@@ -630,6 +705,7 @@ impl<'a> Parser<'a> {
                 && local == "RDF"
             {
                 st.saw_root = true;
+                self.check_vintage(pos);
                 return Ok(Ctx::Body);
             }
             // Some producers put the namespaces on a wrapper; keep looking.
@@ -1127,10 +1203,9 @@ impl<'a> Parser<'a> {
         // A character XML 1.0 cannot represent has no escaped form, so a value carrying
         // one cannot be written back at all: the document this crate would produce is
         // refused by every conforming parser at that byte. `quick-xml` does not enforce
-        // the `Char` production in either direction, so a mis-encoded or corrupted source
-        // file used to travel through unremarked. The character is dropped — the only
-        // alternative to unreadable output — and the loss is reported here rather than
-        // discovered later.
+        // the `Char` production in either direction, so this is where a character arriving
+        // from a mis-encoded or corrupted source file is caught. It is dropped — the only
+        // alternative to unreadable output — and the loss is reported rather than silent.
         if let Some((offset, c)) = crate::xml::find_illegal(&p.text) {
             self.diag(
                 Diagnostic::warning(

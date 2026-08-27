@@ -1,15 +1,9 @@
 //! The prose, held to the same standard as the code.
 //!
-//! Every Rust example in the README and on the documentation site is already compiled as a
-//! doctest, which is what keeps the *code* in the documentation honest. Nothing kept the
-//! documentation's own cross-references honest, and a long design document is exactly where
-//! they rot: `CONCEPT.md` linked `[7.1](#71-the-registry-name-is-not-the-import-name)` at a
-//! section that had been renamed to "The name", and rendered as a live link that goes
-//! nowhere.
-//!
-//! `zola build` already fails on a broken link between site pages. These two files are not
-//! site pages — one is the crate's front page and the other is repository machinery — so
-//! they need their own check.
+//! Every Rust example in the README and on the site is compiled as a doctest, which keeps
+//! the *code* in the documentation honest. Cross-references need their own check: `zola
+//! build` fails on a broken link between site pages, but the README and `CONTRIBUTING.md`
+//! are not site pages, and a renamed section leaves a live link that goes nowhere.
 
 use std::path::{Path, PathBuf};
 
@@ -98,9 +92,9 @@ fn strip_code_spans(line: &str) -> String {
 
 fn check(path: &Path) {
     let Ok(text) = std::fs::read_to_string(path) else {
-        // `CONCEPT.md` is `exclude`d from the published tarball, so the copy of this test
-        // that `cargo package --verify` runs has no file to read. Skipping is right: the
-        // property is about the repository, and the repository's own CI does check it.
+        // `CONTRIBUTING.md` is `exclude`d from the published tarball, so the copy of this
+        // test that `cargo package --verify` runs has no file to read. Skipping is right:
+        // the property is about the repository, whose own CI does check it.
         eprintln!("skipping: {} is not present", path.display());
         return;
     };
@@ -118,10 +112,55 @@ fn check(path: &Path) {
     );
 }
 
+/// Every Rust snippet names the library `cim_rs`, which is what it is called.
+///
+/// The package is `cim-rs` and the library `cim_rs`; `cim` is a different crate on
+/// crates.io. The README and the site pages are doctests, so they cannot get this wrong;
+/// anything else is checked by nothing but this.
+#[test]
+fn documented_snippets_name_the_library_correctly() {
+    for file in ["README.md", "CONTRIBUTING.md"] {
+        let Ok(text) = std::fs::read_to_string(root().join(file)) else {
+            continue;
+        };
+        for (n, line) in text.lines().enumerate() {
+            assert!(
+                !line.contains("cim::"),
+                "{file}:{}: the library is `cim_rs`, not `cim`: {line}",
+                n + 1
+            );
+        }
+    }
+}
+
 #[test]
 fn every_internal_anchor_resolves_to_a_heading() {
     check(&root().join("README.md"));
-    check(&root().join("CONCEPT.md"));
+    check(&root().join("CONTRIBUTING.md"));
+}
+
+/// The rule catalogue on the site lists every rule the crate has.
+///
+/// A table of stable codes is exactly the documentation a pipeline author relies on and
+/// exactly the kind that falls behind, since adding a `Rule` variant compiles fine without
+/// it. `zola` cannot check this and neither can a doctest.
+#[test]
+fn the_rule_catalogue_lists_every_rule() {
+    let page = root().join("site/content/docs/validation.md");
+    let Ok(text) = std::fs::read_to_string(&page) else {
+        eprintln!("skipping: {} is not present", page.display());
+        return;
+    };
+    let missing: Vec<String> = cim_rs::Rule::ALL
+        .iter()
+        .filter(|r| !text.contains(&format!("`{}`", r.code())))
+        .map(|r| format!("{} ({r:?})", r.code()))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the rule catalogue does not list: {}",
+        missing.join(", ")
+    );
 }
 
 /// The slug rule this test depends on, spelled out — a wrong one gives false failures.

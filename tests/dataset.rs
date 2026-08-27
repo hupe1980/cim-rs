@@ -212,3 +212,42 @@ fn reclassifying_sideways_sheds_the_values_the_new_class_cannot_carry() {
     let id = ds.insert(o);
     assert!(ds.reclassify(id, classes::ACLineSegment).is_empty());
 }
+
+/// `Dataset::open` reads the vintage out of the files rather than taking it as an argument.
+#[test]
+fn opening_a_model_set_needs_no_schema_argument() {
+    let dir = require_corpus!(common::cgmes3_model(
+        "MicroGrid/MicroGid-BaseCase/MicroGrid-NL-MAS"
+    ));
+    let ds = Dataset::open(&dir).unwrap();
+    assert_eq!(ds.schema().vintage, "cgmes3");
+    assert!(ds.len() > 100, "{} objects", ds.len());
+
+    // The same model, loaded the explicit way, is the same model.
+    let explicit = Dataset::load_dir(SCHEMA, &dir).unwrap();
+    assert_eq!(ds.content_id(), explicit.content_id());
+}
+
+/// Something that is not a CIM input is an error naming what this build does have, rather
+/// than an empty dataset that looks like a successful load.
+#[test]
+fn opening_something_that_is_not_cim_says_so() {
+    let not_cim = std::env::temp_dir().join(format!("cim-open-{}.xml", std::process::id()));
+    std::fs::write(&not_cim, "<html><body>not a grid model</body></html>").unwrap();
+
+    let err = Dataset::open(&not_cim).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("no CIM vintage recognised"), "{msg}");
+    assert!(
+        msg.contains("cgmes3"),
+        "it should name what is compiled in: {msg}"
+    );
+
+    // An empty directory is the same answer, not a silent empty model.
+    let empty = std::env::temp_dir().join(format!("cim-open-empty-{}", std::process::id()));
+    std::fs::create_dir_all(&empty).unwrap();
+    assert!(Dataset::open(&empty).is_err());
+
+    let _ = std::fs::remove_file(&not_cim);
+    let _ = std::fs::remove_dir_all(&empty);
+}

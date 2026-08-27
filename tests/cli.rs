@@ -1,14 +1,11 @@
 //! The command line, run as a command line.
 //!
 //! `cim` is a shell over the public API, so most of what it does is covered by the library's
-//! own tests. What is not — and what nothing else here can see — is the part that *is* the
-//! tool rather than the library: which stream each thing it writes goes to, and what it
-//! leaves on disk.
+//! own tests. What is not is the part that *is* the tool rather than the library: which
+//! stream each thing it writes goes to, and what it leaves on disk.
 //!
-//! That distinction is not cosmetic. `cim diff a b > change.xml` is the form the README and
-//! the guide both show, and it means the document is stdout: anything else the command has
-//! to say has to go somewhere else, or the file is not a document any more. It did not, and
-//! no test could have noticed, because CI drove `diff` with `--out`.
+//! `cim diff a b > change.xml` means the document is stdout, so anything else the command
+//! has to say must go elsewhere or the file stops being a document.
 
 #![cfg(all(feature = "cli", feature = "cgmes3"))]
 
@@ -157,6 +154,65 @@ fn rdf_writes_a_graph_only_for_a_profile_the_model_describes() {
     let gl = std::fs::read_to_string(graphs.join("GL.nt")).unwrap();
     assert!(gl.contains("GeographicalLocation-EU"), "{gl}");
     assert!(common::check_ntriples(&gl).unwrap() > 3, "{gl}");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The vintage comes from the document, not from which feature happens to be first.
+///
+/// Only reachable through the binary: the library takes a `&'static Schema` and so cannot
+/// choose one. Reading a CGMES 2.4.15 model against the CGMES 3.0 tables resolves nothing,
+/// and the result — an empty model, exit status 0 — reads as a successful load.
+#[test]
+#[cfg(feature = "cgmes2")]
+fn the_vintage_is_detected_from_the_input() {
+    let root = scratch("vintage");
+    let model = root.join("model");
+    std::fs::create_dir_all(&model).unwrap();
+    std::fs::write(
+        model.join("EQ.xml"),
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+            "\n",
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#""#,
+            r#" xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#""#,
+            r#" xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#">"#,
+            "\n",
+            r#"  <md:FullModel rdf:about="urn:uuid:11111111-1111-4111-8111-111111111111">"#,
+            r#"<md:Model.profile>http://entsoe.eu/CIM/EquipmentCore/3/1</md:Model.profile>"#,
+            r#"</md:FullModel>"#,
+            "\n",
+            r#"  <cim:Substation rdf:ID="_22222222-2222-4222-8222-222222222222">"#,
+            r#"<cim:IdentifiedObject.name>S1</cim:IdentifiedObject.name></cim:Substation>"#,
+            "\n</rdf:RDF>\n"
+        ),
+    )
+    .unwrap();
+
+    // No `--vintage`: the document is read as what it says it is.
+    let out = cim().arg("info").arg(&model).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(stdout.contains("objects              1"), "{stdout}");
+    assert!(!stdout.contains("CIM0021"), "{stdout}");
+
+    // Forced to the wrong one, it says so rather than reporting an empty model as fine.
+    let out = cim()
+        .arg("info")
+        .arg(&model)
+        .args(["--vintage", "cgmes3"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        stdout.contains("CIM0021"),
+        "no mismatch reported:\n{stdout}"
+    );
+    assert!(stdout.contains("objects              0"), "{stdout}");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a model that read as nothing exited 0"
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }

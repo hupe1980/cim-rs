@@ -1,19 +1,15 @@
 //! What XML and RDF/XML can actually represent.
 //!
 //! Two constraints of the output syntaxes are not expressible in the object model, so
-//! nothing upstream of serialization enforces them and every layer downstream assumes
-//! them. Both were found the same way — by handing this crate's output to a parser that is
-//! not this crate's — and both are the same shape as the duplicate `xmlns:md` that made
-//! every file this crate wrote a well-formedness error, which the
-//! [conformance notes](https://hupe1980.github.io/cim-rs/docs/conformance/) record.
+//! nothing upstream of serialization enforces them and every layer downstream assumes them.
 //!
 //! **Not every character can appear in an XML document.** XML 1.0 defines the `Char`
 //! production, and a character outside it — a NUL, a `SOH`, most of the C0 range — is not
 //! merely in need of escaping: there is *no* representation for it, numeric character
 //! reference included. A value carrying one makes the whole document unparseable, and
-//! `quick-xml` neither rejects it on the way in nor notices it on the way out, so a
-//! corrupt or mis-encoded source file used to travel straight through this crate and come
-//! out as a document `xmllint`, Xerces and `lxml` all refuse at the offending byte.
+//! `quick-xml` neither rejects it on the way in nor notices it on the way out, so a corrupt
+//! or mis-encoded source file is the only place one comes from and this is the only place
+//! it is caught.
 //!
 //! **`rdf:ID` is an XML `NCName`.** IEC 61970-552 identifiers are UUIDs, and `_` followed
 //! by a UUID is always a valid one — but this crate deliberately keeps non-conforming
@@ -178,9 +174,8 @@ pub fn identifier_form(id: &str) -> IdentifierForm {
 
 /// Whether every character of `s` may follow the `_` that `rdf:ID` prefixes.
 ///
-/// `_` is itself a `NameStartChar`, so the question is only about the tail — which is why
-/// this does not build the prefixed string to ask it. The writer calls this once per object
-/// whose identifier is not a UUID, and an allocation there is one nobody asked for.
+/// `_` is itself a `NameStartChar`, so only the tail is in question and the prefixed string
+/// need not be built.
 fn is_ncname_tail(s: &str) -> bool {
     s.chars().all(is_name_char)
 }

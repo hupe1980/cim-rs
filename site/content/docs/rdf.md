@@ -57,7 +57,7 @@ fn main() -> cim_rs::Result<()> {
 Or from a shell:
 
 ```bash
-cim rdf MicroGrid-BE/ --out graphs/              # one Turtle graph per profile
+cim rdf MicroGrid-BE/ --out graphs/              # a Turtle graph per profile with data
 cim rdf MicroGrid-BE/ --out graphs/ --ntriples   # for piping into a validator
 cim rdf MicroGrid-BE/ --out graphs/ --merged     # the whole model in one graph
 ```
@@ -100,20 +100,15 @@ with the same element-class rule — an SSH graph types an `ACLineSegment` as `c
 — and omits objects the profile says nothing about, exactly as its instance file would.
 
 **Including the headers.** A profile's graph carries the `md:FullModel` of the files that
-*serve* that profile and no others, because that is what its instance file carries. Leaving
-them unfiltered is invisible to every syntactic check — the graph stays valid, every literal
-keeps its type, and the extra subjects are headers the header shapes accept — while making
-the Steady State Hypothesis graph assert that the model declares the Equipment profile. On a
-published MicroGrid set that was twenty-seven headers in every one of eleven graphs.
+*serve* it and no others, because that is what its instance file carries. Unscoped headers
+make the Steady State Hypothesis graph assert that the model declares the Equipment
+profile — valid RDF, correctly typed, accepted by the header shapes, and false.
 
-**A profile the model says nothing about gets no graph at all.** `cim rdf` writes a file
-only where there is something to describe and names the profiles it skipped on stderr. The
-alternative is a graph of nothing but headers: several hundred lines that look like an
-export, validate like an export, and say nothing about the model — which is exactly how an
-empty graph comes to be reported as conformant.
+**A profile the model says nothing about gets no graph.** `cim rdf` writes a file only where
+there is something to describe, and names the profiles it skipped on stderr. A graph of
+nothing but headers looks like an export and validates like one.
 
-Use `--merged` only when the whole model in one graph is what you want, as in a triple
-store.
+Use `--merged` when the whole model in one graph is what you want, as in a triple store.
 
 ## Checked by an engine, not by assertion
 
@@ -121,16 +116,13 @@ store.
 [`pyshacl`](https://github.com/RDFLib/pySHACL) with ENTSO-E's published shapes, in CI.
 
 A profile the model carries no data for is reported as `no data` rather than as a pass, and
-the harness fails if *no* profile produced a graph — a run in which everything was skipped
-would otherwise read as a clean one. Telling the two apart is `cim rdf`'s job rather than
-the harness's: it writes no file where there is nothing to write, so an absent graph is an
-answer rather than a guess about one.
+a run in which nothing was validated fails.
 
 **Every profile that carries data, in every published CGMES 3.0 conformity model, conforms**
-— `RealGrid` included. The only findings that remain belong to the models: every Steady State Hypothesis
-file in the corpus writes `<cim:Equipment rdf:about="…">` carrying nothing but `inService`,
-and the SSH shapes require `IdentifiedObject.mRID`. Reproducing that faithfully is correct;
-hiding it would not be.
+— `RealGrid` included. The only findings that remain belong to the models: every Steady
+State Hypothesis file in the corpus writes `<cim:Equipment rdf:about="…">` carrying nothing
+but `inService`, and the SSH shapes require `IdentifiedObject.mRID`. Reproducing that
+faithfully is correct; hiding it would not be.
 
 Running SHACL is deliberately **not** this crate's job — there is no mature SHACL engine in
 Rust and writing one would be a second project. Emitting data an engine can actually consume

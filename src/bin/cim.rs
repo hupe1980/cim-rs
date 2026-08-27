@@ -23,6 +23,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use cim_rs::VINTAGES;
 use cim_rs::prelude::*;
 use cim_rs::rdf::{RdfOptions, Syntax};
 use cim_rs::schema::{ProfileId, Schema};
@@ -45,7 +46,7 @@ loaded into one model, which is what a CGMES profile set is.
 
 options:
   -o, --out PATH    where to write (a directory, or a file for `diff`)
-  --vintage KEY     which schema to read against (default: the first built in)
+  --vintage KEY     which schema to read against (default: detected from the input)
   --profile KEY     restrict `rdf` and `diff` to one profile, e.g. SSH
   --rule CODE       show only this rule in `validate`, e.g. CIM0007
   --ntriples        write N-Triples rather than Turtle
@@ -265,14 +266,9 @@ fn rdf(out: &mut dyn Write, args: &Args) -> Result<ExitCode, Fail> {
             Some(p) => (schema.profile(p).keyword, p.mask()),
             None => ("model", 0),
         };
-        // A profile the model carries no data for gets no file. The alternative is a graph
-        // of nothing but the loaded files' headers — hundreds of lines describing no model
-        // — which reads as an export and validates as one, so a consumer cannot tell it
-        // apart from a profile that really is conformant.
-        //
-        // Only for a profile. `--merged` asks for *the model* in one graph, and answering
-        // that with no file at all would be a surprise rather than an answer; an empty model
-        // is a legitimate thing to export and the caller named it explicitly.
+        // A profile the model carries no data for gets no file: a graph of nothing but the
+        // loaded files' headers reads as an export and validates as one. `--merged` is
+        // exempt — it asks for *the model*, and an empty model is a legitimate export.
         if profile.is_some() && !cim_rs::rdf::has_content(&ds, mask) {
             empty.push(name);
             continue;
@@ -347,11 +343,9 @@ fn diff(out: &mut dyn Write, args: &Args) -> Result<ExitCode, Fail> {
                 .map_err(|e| e.to_string())?
         }
     }
-    // Where the report goes depends on where the document went. With `--out` the document
-    // is a file and stdout is free to carry the report; without it the document *is* stdout,
-    // and appending anything to it makes `cim diff a b > change.xml` — the form the README
-    // and the guide both show — produce a file no XML parser accepts. A compound that
-    // changed is enough to trigger it, so this is reachable, not theoretical.
+    // With `--out` the document is a file and stdout is free to carry the report; without it
+    // the document *is* stdout, and appending anything to it makes `cim diff a b >
+    // change.xml` produce a file no XML parser accepts.
     if !change.report.is_empty() {
         let label = "not expressible as statements";
         match &args.out {
@@ -368,14 +362,6 @@ fn diff(out: &mut dyn Write, args: &Args) -> Result<ExitCode, Fail> {
 // ---------------------------------------------------------------------------
 // Shared plumbing
 // ---------------------------------------------------------------------------
-
-/// Every vintage compiled into this binary, in feature order.
-static VINTAGES: &[&Schema] = &[
-    #[cfg(feature = "cgmes3")]
-    cim_rs::cgmes3::SCHEMA,
-    #[cfg(feature = "cgmes2")]
-    cim_rs::cgmes2::SCHEMA,
-];
 
 /// A command either failed with something to say, or was told to stop writing.
 enum Fail {
@@ -490,11 +476,11 @@ impl Args {
                         .parse()
                         .map_err(|_| format!("--limit takes a number, not {v:?}"))?;
                 }
-                // Any unrecognised flag, not only a long one. A mistyped `-Q` used to fall
-                // through to the arm below and be taken for an input path, where
-                // `instance_files` found nothing at it and said nothing — so the command
-                // ran with the flag silently ignored, which is the worst of the three
-                // possible outcomes. A bare `-` stays available for a future "read stdin".
+                // Any unrecognised flag, not only a long one: a mistyped `-Q` falling
+                // through to the arm below would be taken for an input path, where
+                // `instance_files` finds nothing and says nothing, and the command would
+                // run with the flag silently ignored. A bare `-` stays available for a
+                // future "read stdin".
                 other if other.starts_with('-') && other != "-" => {
                     return Err(format!("unknown option {other:?}"));
                 }
@@ -505,18 +491,33 @@ impl Args {
         Ok(args)
     }
 
+    /// Which schema to read against: what `--vintage` says, or what the files say.
+    ///
+    /// Detection is the default because the vintage is written in the document. Guessing it
+    /// from feature order gets a CGMES 2.4.15 model read against the CGMES 3.0 tables, where
+    /// no class resolves and the result is an empty model — which looks like a clean read.
     fn schema(&self) -> Result<&'static Schema, String> {
-        match &self.vintage {
-            None => VINTAGES.first().copied().ok_or_else(no_vintage),
-            Some(key) => VINTAGES
+        if let Some(key) = &self.vintage {
+            return VINTAGES
                 .iter()
                 .find(|s| s.vintage.eq_ignore_ascii_case(key))
                 .copied()
                 .ok_or_else(|| {
                     let known: Vec<&str> = VINTAGES.iter().map(|s| s.vintage).collect();
                     format!("no vintage {key:?} in this build; it has {known:?}")
-                }),
+                });
         }
+        let first = self
+            .inputs
+            .iter()
+            .flat_map(|p| cim_rs::instance_files(p))
+            .next();
+        if let Some(path) = first
+            && let Some(schema) = cim_rs::load::detect_file(&path)
+        {
+            return Ok(schema);
+        }
+        VINTAGES.first().copied().ok_or_else(no_vintage)
     }
 
     fn profile_id(&self, schema: &'static Schema) -> Result<ProfileId, String> {

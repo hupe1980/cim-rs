@@ -38,7 +38,8 @@ fn main() -> cim_rs::Result<()> {
 
 The IEC Common Information Model is how European transmission system operators exchange
 grid models. The mature implementations are Java ([PowSyBl][powsybl]), C++ (libcimpp) and
-Python ([pycgmes][pycgmes], CIMpy). Rust had none — and Rust is exactly where the gap
+Python ([pycgmes][pycgmes], CIMpy). Rust had only an early multi-crate experiment
+([cimoxide][cimoxide]) — and Rust is exactly where the gap
 hurts: high-throughput model servers, edge grid controllers, WebAssembly browser tooling
 and safety-critical pipelines all want a fast, memory-safe, dependency-light CIM core.
 
@@ -47,6 +48,7 @@ generated from the vocabularies ENTSO-E publishes.
 
 [powsybl]: https://powsybl.readthedocs.io/projects/powsybl-core/en/stable/grid_exchange_formats/cgmes/
 [pycgmes]: https://github.com/alliander-opensource/pycgmes
+[cimoxide]: https://github.com/m-mirz/cimoxide
 
 </div>
 </section>
@@ -142,7 +144,7 @@ cargo install cim-rs --features cli   # the `cim` command line
 ```bash
 cim info     MicroGrid-BE/                  # what a model set contains
 cim validate MicroGrid-BE/ --rule CIM0007   # exits 1 on any error
-cim rdf      MicroGrid-BE/ --out graphs/    # one typed RDF graph per profile
+cim rdf      MicroGrid-BE/ --out graphs/    # one typed RDF graph per profile with data
 cim diff     before/ after/ > change.xml    # the change set between two states
 ```
 

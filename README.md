@@ -28,6 +28,7 @@ use cim_rs::prelude::*;
 use cim_rs::cgmes3::{SCHEMA, views::ACLineSegment};
 
 // A CGMES model is a *set* of profile files describing the same objects.
+// `Dataset::open` detects the vintage from the files; name SCHEMA to fix it.
 let grid = Dataset::load_dir(SCHEMA, "MicroGrid-BE")?;
 
 for line in grid.view::<ACLineSegment>() {
@@ -114,6 +115,11 @@ conformity models.
 * **Compounds are values, not references.** `Location.mainAddress` holds a `StreetAddress`
   inline, and those nest. A parser that treats the nested elements as text does not fail —
   it fabricates a value.
+* **A document says which vintage it is.** `xmlns:cim=".../CIM100#"` is CGMES 3.0,
+  `".../CIM-schema-cim16#"` is 2.4.15. `reader::sniff` reads that off the root element and
+  the `cim` tool uses it by default, because reading a model against the wrong vintage
+  resolves no class at all — an empty model and an exit status of zero, which looks like a
+  clean load. A mismatch is reported as `CIM0021` rather than left to be inferred.
 * **Tolerance costs a report.** Lenient reading is the default because published models
   deviate, and everything the reader tolerates it also has to *say* — so the report is
   bounded, and says where it stopped.
@@ -127,10 +133,9 @@ conformity models.
 * **Some things only the *syntax* forbids.** A value cannot hold a character XML 1.0 has no
   representation for — most of the C0 range, escapes included — and `rdf:ID` is an `NCName`,
   which an identifier a producer chose freely need not be. Neither can happen in a
-  conforming model, both arrive from a mis-encoded file, and neither is visible to a
-  well-formedness check: the second because such a document *is* well-formed XML, and the
-  first because the check shared the reader's parser until it was taught the character range
-  itself. Reported as `CIM0019` and `CIM0020`; never written.
+  conforming model, both arrive from a mis-encoded file, and neither is caught by an
+  ordinary well-formedness check — such a document *is* well-formed XML. Reported as
+  `CIM0019` and `CIM0020`; never written.
 
 The reasoning behind each rule is in [the documentation][conformance] and in the rustdoc
 next to the code it governs.
@@ -267,67 +272,22 @@ round-trip, difference models in both directions, pinned validation findings, an
 deterministic mutation campaign, and cross-validation against PowSyBl (Java) and rdflib
 (Python) in pinned containers on both vintages. The library also builds for
 `wasm32-unknown-unknown` in CI, so "pure Rust, no C dependencies" is a build rather than a
-claim. 208 tests; corpus-backed tests skip cleanly on a fresh clone.
+claim. 220 tests; corpus-backed tests skip cleanly on a fresh clone.
 [The full record][conformance]
 
 ## Development
 
-The standards artifacts are **not vendored**. Fetch them, then regenerate:
+The standards artifacts are **not vendored**; `specs/` is gitignored and fetched, and
+generated sources are committed. Every repository task is a subcommand of one program:
 
 ```bash
 cargo xtask fetch-specs         # ENTSO-E RDFS + SHACL + conformity models -> specs/
 cargo xtask codegen             # RDFS -> src/generated/
-cargo xtask crossvalidate       # PowSyBl and rdflib read our output (needs Docker)
-cargo xtask codegen --check     # CI gate: committed sources match the vocabularies
-cargo xtask inspect             # summarise every parsed vintage
 cargo test --workspace --all-features
-cargo bench -p cim-rs           # throughput, synthetic and (if fetched) RealGrid
-
-pip install pyshacl             # a real SHACL engine, for the interop check
-cargo xtask shacl               # RDF export vs. ENTSO-E's published shapes
 ```
 
-Every repository task is a subcommand of one program. `xtask` owns the artifact list as well
-as the vintage table, so `fetch-specs` finishes by asking the generator whether every
-vocabulary file it needs actually arrived.
-
-Running SHACL stays somebody else's job: there is no mature SHACL engine in Rust and writing
-one would be a second project, so `cargo xtask shacl` drives `pyshacl` and reads its report.
-Point `PYSHACL` at a virtualenv if the binary is not on `PATH`.
-
-Adding a vintage means adding an entry to `xtask/src/vintage.rs` — which RDFS files it is
-made of and, where the vocabularies do not say so themselves, the profile IRIs their
-instance files declare — then regenerating.
-
-**Examples.** Four runnable programs, one task each; `build_model` needs no input at all.
-
-```bash
-cargo run --example build_model --features cgmes3
-cargo run --example inspect     --features cgmes3 -- <model-dir>
-cargo run --example to_rdf      --features cgmes3 -- <model-dir> EQ
-cargo run --example changes     --features cgmes3 -- <base> <target>
-```
-
-**The site.** `site/` is a [Zola](https://www.getzola.org/) site, built and deployed to
-GitHub Pages by `.github/workflows/site.yml`:
-
-```bash
-cd site && zola serve      # http://127.0.0.1:1111
-cd site && zola check      # every internal and external link
-```
-
-**Layout.** `cim-rs` is the repository's root package, so `src/`, `tests/`, `benches/` and
-`examples/` sit at the top and this README is the crate's front page rather than a copy of
-it. The workspace has one other member, `xtask`, which is the generator and is never
-published; `fuzz/` is a separate package outside the workspace, as `cargo-fuzz` expects.
-`cargo package` ships the library, the binary and the examples and nothing else.
-
-Robustness is covered two ways: `tests/robustness.rs` runs a deterministic mutation campaign
-(truncation at every byte, single-byte corruption, region deletion) on stable as part of
-`cargo test`, and `fuzz/` holds `cargo-fuzz` targets for longer runs on nightly.
-
-`specs/` is gitignored. Generated sources **are** committed: builds stay reproducible and
-fast for downstream users, docs.rs works, and a schema change appears as a reviewable diff.
+Repository layout, adding a schema vintage, the `specs/` corpus and its licences, the
+interop harnesses and the release process are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Licensing and attribution
 

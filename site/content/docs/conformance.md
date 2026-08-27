@@ -46,14 +46,15 @@ present:
 | **Syntax limits** | A character XML cannot represent is stripped and reported where it enters (`CIM0019`); an identifier that is an absolute IRI is written as `rdf:about` rather than as an `rdf:ID` that is not an `NCName`, and one that is neither is reported (`CIM0020`) |
 | **Profile bound** | Every shipped vintage fits `ProfileMask`, with its profiles' bits pinned distinct |
 | **Command line & examples** | Run against published models in CI; what they write is checked by `xmllint` |
-| **Feature matrix** | Every supported feature combination builds, lints **and compiles its doctests** — the last is what the matrix used to skip, and the README and guide were the part that broke |
+| **Feature matrix** | Every supported feature combination builds, lints **and compiles its doctests** — `clippy --all-targets` skips those, and an example must name a vintage |
 | **Documentation links** | Every `#`-anchor in the README and the design document resolves to a heading actually in it; `zola build` fails on a broken link between site pages |
 | **Cross-validation** | PowSyBl (Java) builds the identical network from a re-export as from the published files — every equipment count, both bus views, and a SHA-256 over every identifier — on four assembled CGMES 3.0 configurations and the CGMES 2.4.15 MicroGrid archive; rdflib (Python) parses the RDF export as a graph |
 | **Identifier text** | Every re-exported file's `rdf:ID`/`rdf:about` values compared letter for letter with its input — what the class-and-style census cannot see |
 | **Streams** | `cim diff` run both redirected and with `--out`, and the two compared byte for byte: where a command's result is a document, the document is the whole of stdout |
 | **Portability** | The library built for `wasm32-unknown-unknown` — no filesystem, no C dependency — so "usable from WASM" is a build rather than a claim |
+| **Vintage detection** | Both corpora read with the vintage taken from the documents; a mismatch reported as `CIM0021` at the root element, and neither corpus produces one when correctly paired |
 
-208 tests in total. Corpus-backed tests skip cleanly when the standards artifacts are
+220 tests in total. Corpus-backed tests skip cleanly when the standards artifacts are
 absent, so a fresh clone is green.
 
 ## The check that is not ours
@@ -86,25 +87,16 @@ file changes the digest completely, the switch count from 28 to 27, and the bus 
 14 to **15** — the switch had been holding two buses together. That a count moved *upward*
 is why the digest is there.
 
-### What it found
+### Assertions must be exactly true
 
-CGMES 2.4.15 disagreed the first time it was run. The boundary set writes UUIDs in *mixed*
-case — `_24C12434-E42B-497f-928F-119C6AE92079` — and `Mrid` remembered whether an identifier
-had been hyphenated but not how it was cased, so all 26 identifiers in that file were
-rewritten on export. Nothing here could see it: the census compares classes and identity
-styles, and the round-trip compares the model, where identity is the sixteen bytes. PowSyBl
-saw it at once, because an IIDM identifier is the mRID string. `Mrid` now carries case as a
-bitmask over the 32 digit positions — at no extra size — and the census compares identifiers
-letter for letter.
-
-It also produced two false positives, both worth knowing about because they are the same
-mistake. PowSyBl names a tie line by joining its two halves' mRIDs in *encounter* order, so
-this crate's deterministic mRID ordering flips it while the network stays identical; the
-harness compares that pair unordered. And an assertion that no class appears both named and
-blank fires on the published 2.4.15 MicroGrid, where 43 `CurrentLimit`s are identified by
-`_88240efd-b544-4131-bc99-e6b77d4bac881` — a UUID with a digit appended, which is not a UUID,
-has no `urn:uuid:` form, and is correctly left blank rather than given an invented name. Both
-were withdrawn. A cross-validation's first job is to be believable.
+PowSyBl names a tie line by joining its two halves' mRIDs in *encounter* order, which this
+crate's deterministic mRID ordering flips while the network stays identical — so the harness
+compares that pair unordered. And "no class appears both named and blank" fires on the
+published 2.4.15 MicroGrid, where 43 `CurrentLimit`s are identified by
+`_88240efd-b544-4131-bc99-e6b77d4bac881`: a UUID with a digit appended, which has no
+`urn:uuid:` form and is correctly left blank rather than given an invented name. A
+cross-validation's first job is to be believable, so both assertions were dropped in favour
+of comparing what is actually invariant.
 
 ## How the layers differ
 
@@ -114,8 +106,8 @@ are several:
 * **Round-trip on the model** proves no *value* was lost. It cannot see the document.
 * **A per-file element census** — how many objects of each class, identified which way —
   proves the *document* was reproduced. It cannot see whether the document is valid.
-* **A conforming XML parser** proves the output is a document at all. This is what found
-  that every file the writer emitted carried `xmlns:md` twice.
+* **A conforming XML parser** proves the output is a document at all — namespaces resolved,
+  no duplicate attribute, every character inside XML 1.0's `Char` production.
 * **A real SHACL engine** proves the RDF export is something the wider ecosystem accepts.
 * **Deterministic mutation** — truncation at every byte, single-byte corruption, region
   deletion — proves the never-panic guarantee on stable, alongside `cargo-fuzz` targets for
@@ -146,6 +138,7 @@ various reasons."* Three of those deviations are load-bearing and are handled ex
 * **Running SHACL.** Emitting data a SHACL engine can consume is a goal and is met; running
   the engine would be a second project.
 * Reading RDF back. CIM/XML is the exchange format.
+* GUI and diagram rendering — DL and GL data are exposed; drawing is a consumer concern.
 * IEC 62325 market profiles and 61968 message envelopes — the generator treats a profile as
   data, so these can be added without architectural change.
 
@@ -160,3 +153,20 @@ and nothing in the build or test pipeline depends on them.
 
 The ENTSO-E conformity test models are licensed **CC BY-SA 4.0** and owned by ENTSO-E. They
 are a local and CI test corpus only, never redistributed with the crate.
+
+## Sources
+
+- [IEC 61970-301:2020 (IEC webstore)](https://webstore.iec.ch/en/publication/62698) — with AMD1:2022, this is CIM17
+- [IEC 61970:2026 SER — the series package, still shipping 61970-501:2006](https://webstore.iec.ch/en/publication/61167)
+- [CIM18 / Ed.7 development status — WG13 release notes](https://utf13-reports.ucaiug.io/18v03-18v04/CIM18v04_ReleaseNotes.pdf)
+- [IEC TS 61970-600-1:2021 (CGMES 3.0)](https://webstore.iec.ch/en/publication/63866) · [ENTSO-E CGMES library](https://www.entsoe.eu/data/cim/cim-for-grid-models-exchange/)
+- [ENTSO-E application-profiles-library (RDFS + SHACL, CGMES + NC)](https://github.com/entsoe/application-profiles-library) · [ENTSO-E RDF-Syntax User Guide v1.1.0 (2024-04-04)](https://eepublicdownloads.entsoe.eu/clean-documents/CIM_documents/Grid_Model_CIM/RDF-SyntaxUserGuide_v_1-1-0.pdf)
+- [CIMTool release notes — 61970-501 Ed.2 draft RDFS, CIM18 domain types](https://cimtool.ucaiug.io/release-notes/)
+- [PowSyBl CIM-CGMES importer/exporter docs](https://powsybl.readthedocs.io/projects/powsybl-core/en/stable/grid_exchange_formats/cgmes/)
+- [sogno-platform/cimgen (Apache-2.0; C++, Go, Java, Python backends)](https://github.com/sogno-platform/cimgen) · [pycgmes (cimgen-generated Python)](https://github.com/alliander-opensource/pycgmes) · [cimoxide (early Rust CIM tooling)](https://github.com/m-mirz/cimoxide)
+- [ENTSO-E CIM conformity & interoperability (test configurations, CC BY-SA 4.0)](https://www.entsoe.eu/data/cim/cim-conformity-and-interoperability/)
+- [CIM Modeling Guide — UCAIug CIM licensing (Apache 2.0)](https://cim-mg.ucaiug.io/latest/section1-introduction/) · [UCAIug CIM JSON-LD syntax work](https://github.com/cimug-org/CIM_JSON-LD_Syntax)
+- [W3C SHACL](https://www.w3.org/TR/shacl/) · [W3C RDF 1.1 N-Triples](https://www.w3.org/TR/n-triples/) · [W3C RDF 1.1 Turtle](https://www.w3.org/TR/turtle/) · [W3C XML Namespaces 1.0](https://www.w3.org/TR/xml-names/)
+- [OpenCGMES (SOPTIM, Apache-2.0)](https://opencgmes.soptim.de/cimxml/overview) — its CIMXML overview independently names normalizing UUIDs "with and without underscore prefixes and dashes" as required behaviour, which is [identity: the mRID](@/docs/concepts.md#identity-the-mrid) · [LF Energy Summit 2025: *Breaking down CGMES barriers*, the talk that catalogues them](https://static.sched.com/hosted_files/lfenergysummiteu2025/5f/LF%20Energy%20Summit%202025%20-%20OpenCGMES.pdf)
+- [pySHACL, the engine `cargo xtask shacl` drives](https://github.com/RDFLib/pySHACL) · [ModShape — Python/SHACL validation of CGMES datasets](https://github.com/griddigit-ci/ModShape)
+- [oxrdfxml (maintained RDF/XML parser; rio_xml deprecated)](https://crates.io/crates/oxrdfxml)

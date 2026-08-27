@@ -219,22 +219,15 @@ fn rdflib(root: &Path, model: &Path, tmp: &Path, vintage: &str) -> Result<bool> 
         }
     }
 
-    // Blank subjects are reported, not failed on, and the reason is worth stating because
-    // two plausible-looking assertions here are both wrong.
+    // Reported, not failed on: both plausible assertions here are wrong.
     //
-    // "Every subject must be named" fails on any model carrying a postal address: a CIM
-    // *compound* has no identity of its own, so a blank node is the only correct rendering.
-    //
-    // "A class must not appear both named and blank" is the subtler mistake, and it was
-    // tried here before being withdrawn. It fires on the published CGMES 2.4.15 MicroGrid,
-    // where 43 `CurrentLimit`s and 5 `Line`s are identified by things like
-    // `_88240efd-b544-4131-bc99-e6b77d4bac881` — a UUID with a digit appended — and
-    // `_d4affe50…3cfd_X`. Those are not UUIDs, so they have no `urn:uuid:` form, and
-    // minting one would be the fabrication `Mrid` exists to refuse. The *model* is
-    // non-conforming, `validate` reports it as `CIM0004`, and the graph is right to show it.
-    //
-    // So this is information about the model rather than a verdict on the exporter. An
-    // assertion that cannot be stated precisely is worse than a number with its reason.
+    // "Every subject must be named" fails on any model carrying a postal address — a CIM
+    // *compound* has no identity, so a blank node is the only correct rendering. "A class
+    // must not appear both named and blank" fires on the published CGMES 2.4.15 MicroGrid,
+    // where 43 `CurrentLimit`s are identified by `_88240efd-…-e6b77d4bac881`: a UUID with a
+    // digit appended, which has no `urn:uuid:` form and cannot be given one without the
+    // fabrication `Mrid` exists to refuse. That model is non-conforming (`CIM0004`) and the
+    // graph is right to show it, so this is information rather than a verdict.
     let blank = n("subjects").saturating_sub(n("namedSubjects"));
     println!("  {:<34} {blank:>8}", "blank subjects");
     if blank > 0 {

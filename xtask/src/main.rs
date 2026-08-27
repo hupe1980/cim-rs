@@ -155,7 +155,7 @@ fn inspect() -> Result<()> {
 
         // Attributes exclusive to one profile show whether the split worked.
         for (i, p) in schema.profiles.iter().enumerate() {
-            let bit: u32 = 1 << i;
+            let bit: crate::ir::ProfileMask = 1 << i;
             let exclusive = schema
                 .classes
                 .values()

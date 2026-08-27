@@ -97,12 +97,10 @@ pub fn check(root: &Path, model: Option<&str>) -> Result<()> {
     let mut validated = 0usize;
     for (keyword, shape_file) in SHAPES {
         let graph = out.path().join(format!("{keyword}.ttl"));
-        // A profile this model carries no data for is not a pass, and telling the two apart
-        // is `cim rdf`'s job rather than this harness's: it writes no graph for a profile
-        // with no objects in it, so an absent file is the answer rather than a guess about
-        // one. It used to be guessed from a line count, and the guess could not work — a
-        // graph of nothing but the loaded files' headers runs to hundreds of lines, so the
-        // threshold never fired and this harness reported empty profiles as validated.
+        // A profile this model carries no data for is not a pass. Telling the two apart is
+        // `cim rdf`'s job rather than this harness's — it writes no graph for a profile with
+        // no objects — so an absent file is the answer rather than a guess about a present
+        // one, which no threshold on the graph's size can give.
         if !graph.is_file() {
             println!("  {keyword:<5} no data");
             continue;
@@ -145,9 +143,8 @@ pub fn check(root: &Path, model: Option<&str>) -> Result<()> {
     if failed {
         bail!("some profiles do not conform");
     }
-    // "Every profile conforms" is worth nothing if every profile was skipped. A model set
-    // this harness is pointed at has data for several profiles; none at all means the export
-    // produced nothing, which is a failure that would otherwise read as a clean run.
+    // "Every profile conforms" is worth nothing if every profile was skipped: no graph at
+    // all means the export produced nothing, which would otherwise read as a clean run.
     if validated == 0 {
         bail!(
             "no profile of {} produced a graph to validate",

@@ -431,13 +431,11 @@ fn a_computed_difference_can_be_restricted_to_one_profile() {
 
 /// A change file re-exported as itself, even when its header carries no identifier.
 ///
-/// `save_as_loaded` reproduces the file set a model was read from, and a change file is one
-/// of those files — but it holds statements rather than objects, so the statements have to
-/// be found again by matching the header against the retained differences. Matching on the
-/// header's identifier is the obvious rule and is not enough: `md:DifferenceModel` without
-/// an `rdf:about` is a defect the reader tolerates (`CIM0013`), and under identifier-only
-/// matching the file was silently dropped from the export instead — the model came back one
-/// file short, and the caller was told only that something was "skipped".
+/// `save_as_loaded` reproduces the file set a model was read from, and a change file holds
+/// statements rather than objects, so they have to be matched back to the header. The
+/// header's identifier is the obvious key and is not enough: `md:DifferenceModel` without an
+/// `rdf:about` is a defect the reader tolerates (`CIM0013`), and matching on identifier
+/// alone drops such a file from the export.
 #[test]
 fn a_change_file_without_an_identifier_is_still_re_exported() {
     const NS: &str = "http://iec.ch/TC57/CIM100#";

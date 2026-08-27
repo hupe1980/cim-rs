@@ -12,3 +12,14 @@
 pub mod cgmes2;
 #[cfg(feature = "cgmes3")]
 pub mod cgmes3;
+
+/// Every schema vintage compiled into this build, in feature order.
+///
+/// Empty when no vintage feature is enabled. [`Schema::detect`](crate::schema::Schema::detect)
+/// searches this to identify a document from the namespaces it declares.
+pub static VINTAGES: &[&crate::schema::Schema] = &[
+    #[cfg(feature = "cgmes3")]
+    cgmes3::SCHEMA,
+    #[cfg(feature = "cgmes2")]
+    cgmes2::SCHEMA,
+];

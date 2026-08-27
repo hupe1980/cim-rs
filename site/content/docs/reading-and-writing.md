@@ -203,6 +203,6 @@ A tolerant reader accepting its own output proves nothing. Every document the wr
 produces is checked against the XML and XML Namespaces recommendations — balanced elements,
 no duplicate attribute, every prefix bound before use — over the whole published corpus.
 
-That check is not theoretical. It is what found that every file the writer emitted carried
-`xmlns:md` twice: a duplicate attribute is a well-formedness error, and no CIM-tolerant
-reader notices while every conforming XML parser refuses the document at byte 2.
+The check is not theoretical: a duplicate attribute such as `xmlns:md` written twice is a
+well-formedness error that no CIM-tolerant reader notices, while every conforming XML parser
+refuses the document at byte 2.

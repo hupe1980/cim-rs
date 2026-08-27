@@ -27,6 +27,11 @@
 //!
 //! # Getting started
 //!
+//! [`Dataset::open`] is the shortest path in: it reads the vintage out of the document's own
+//! namespace declarations, so a directory, a zip archive or a single file loads without the
+//! caller knowing whether it is CGMES 3.0 or 2.4.15. Name the schema explicitly — as below —
+//! when a program only ever handles one vintage.
+//!
 // An example has to name a vintage, and a vintage is a feature — so it is written only
 // into a build that has the one it names. See `Dataset::view`.
 #![cfg_attr(
@@ -98,35 +103,31 @@ for d in ds.validate().iter() {
 //! * Serialization follows IEC 61970-552: `rdf:ID`/`rdf:about` identity, `md:FullModel`
 //!   headers, `rdf:parseType="Resource"` compounds, `dm:` difference models. Both reading
 //!   and writing are covered, and a model set re-exports as the files it came from.
-//! * Every document written is well-formed XML — checked with namespace resolution,
-//!   duplicate-attribute detection and XML 1.0's own character range over the whole
-//!   published corpus, because a tolerant reader accepting its own output proves nothing
-//!   about whether anyone else's parser will. Two constraints of the output syntax that
-//!   the object model cannot express are enforced at the writer and reported by
-//!   [`validate()`]: a value must hold only characters XML can represent (`CIM0019`), and
-//!   an identifier must have an `rdf:ID` or `rdf:about` form (`CIM0020`). Neither can fire
-//!   on conforming input; both are reachable from a mis-encoded file. See [`xml`].
+//! * Every document written is well-formed XML, checked over the whole published corpus
+//!   with namespace resolution, duplicate-attribute detection and XML 1.0's character
+//!   range — a tolerant reader accepting its own output proves nothing about anyone else's
+//!   parser. Two constraints of the output syntax that the object model cannot express are
+//!   enforced at the writer and reported by [`validate()`]: a value must hold only
+//!   characters XML can represent (`CIM0019`), and an identifier must have an `rdf:ID` or
+//!   `rdf:about` form (`CIM0020`). See [`xml`].
 //! * [`validate()`] performs the structural checks the RDFS vocabulary justifies:
 //!   cardinality, value datatypes, fixed values, reference targets, profile membership,
-//!   identifier form. The datatype check is not redundant with parsing: CIM/XML exchanges
+//!   identifier form. The datatype check is not redundant with parsing — CIM/XML exchanges
 //!   no type information at all, so a value's type is only decidable against the profile.
-//!   Semantic rules that ENTSO-E publishes as SHACL shapes are out of scope here — export
-//!   with [`rdf`] and run them with a SHACL engine.
+//!   Semantic rules ENTSO-E publishes as SHACL shapes are out of scope: export with
+//!   [`rdf`] and run them with a SHACL engine.
 //! * Reading is tolerant by default ([`ReadOptions::lenient`]), because published models
-//!   carry vendor extensions and identifier deviations. Nothing is silently dropped:
-//!   every deviation becomes a [`Diagnostic`] with a stable rule code
-//!   (`CIM0001`–`CIM0020`) and, when it came from parsing, a byte offset into the source.
-//!   [`line_and_column`] turns that into a line where a human has to read it. Tolerance
-//!   has a cost worth naming: the report grows with how broken the input is, so
-//!   [`ReadOptions::max_diagnostics`] bounds it and the reader says when it stopped.
+//!   carry vendor extensions and identifier deviations. Nothing is silently dropped: every
+//!   deviation becomes a [`Diagnostic`] with a stable rule code (`CIM0001`–`CIM0021`) and,
+//!   from parsing, a byte offset that [`line_and_column`] turns into a line. The report
+//!   grows with how broken the input is, so [`ReadOptions::max_diagnostics`] bounds it and
+//!   the reader says when it stopped.
 //! * Identifiers are compared by the UUID they denote, not by how a producer spelled it.
-//!   Published CGMES 2.4.15 files write `rdf:ID="_1fa19c281c8f4e1eaad9e1cab70f923e"` —
-//!   a UUID with the hyphens left out — and reading that as opaque text would deny the
-//!   object a `urn:uuid:` name in RDF and split it in two the moment another file spells
-//!   it with hyphens. The spelling is remembered, so re-export writes back what the
-//!   document had; the identity does not depend on it. The same holds for a reference
-//!   written as an absolute IRI: `http://host/EQ.xml#_<uuid>` is the object its fragment
-//!   names. See [`MridForm`].
+//!   Published CGMES 2.4.15 files write `rdf:ID="_1fa19c281c8f4e1eaad9e1cab70f923e"`, and
+//!   references as absolute IRIs; read as opaque text, such an object loses its
+//!   `urn:uuid:` name in RDF and splits in two against a file that spells the same UUID
+//!   conventionally. The spelling is remembered so re-export reproduces the document; the
+//!   identity does not depend on it. See [`MridForm`].
 //!
 //! # A command line
 //!

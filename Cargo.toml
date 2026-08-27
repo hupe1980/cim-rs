@@ -1,9 +1,8 @@
 [package]
-# `cim` on crates.io has been taken since 2022 by an unrelated code generator, so the
-# package is published under the repository's own name. The library keeps Cargo's default
-# name for it — `cim_rs` — rather than overriding `[lib] name`: an import path that does not
-# match the package anyone typed into `cargo add` is a small, permanent surprise, and Rust
-# programmers already read `foo-bar` on the registry as `foo_bar` in a `use`.
+# `cim` on crates.io is taken by an unrelated code generator, so the package is published
+# under the repository's own name and the library keeps Cargo's default `cim_rs` for it.
+# `[lib] name = "cim"` would recover the shorter import at the cost of an import path that
+# does not match what the reader typed into `cargo add`.
 name = "cim-rs"
 version = "0.1.0"
 description = "IEC Common Information Model (CIM/CGMES) for power systems: typed model, CIM/XML I/O, profile-aware validation"
@@ -15,9 +14,8 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-# The published crate is the library and nothing else. Everything below is repository
-# machinery: the generator that fetches the standards artifacts and produces
-# `src/generated`, the fuzz targets, and the artifacts themselves.
+# The published crate is the library and nothing else; everything listed here is repository
+# machinery. Enforced by `cargo package` in CI rather than by directory layout.
 exclude = [
     "/xtask",
     "/fuzz",
@@ -25,13 +23,11 @@ exclude = [
     "/.github",
     "/.cargo",
     "/deny.toml",
-    "/CONCEPT.md",
-    # The cross-validation harnesses: a Maven project and a Python script, run in pinned
-    # containers to check this crate's output against implementations that are not it.
+    "/CONTRIBUTING.md",
+    # The containerised PowSyBl and rdflib harnesses.
     "/crossvalidate",
-    # The documentation site's presentation is repository machinery; its `content/` is not.
-    # Those pages' Rust examples are compiled as doctests, so shipping them keeps the
-    # tarball's own test suite runnable — the same reason the README is shipped.
+    # The site's presentation, but not its `content/`: those pages' Rust examples are
+    # doctests, so shipping them keeps the tarball's own test suite runnable.
     "/site/templates",
     "/site/static",
     "/site/public",
@@ -39,25 +35,19 @@ exclude = [
 ]
 
 [workspace]
-# The crate lives at the repository root rather than under `crates/`: it is the only
-# published package, and a directory holding exactly one thing is a level of nesting that
-# earns nothing. It did cost something — with the crate one level down, the repository
-# README and the crate's own front page were two files, so the generator copied one to the
-# other and CI checked they had not drifted. At the root they are the same file.
-#
-# `xtask` stays a member so `cargo xtask codegen` builds it, and stays unpublished so the
-# published surface remains a single crate.
+# The crate is the root package rather than a member under `crates/`: it is the only
+# published one, and at the root the repository README and the crate's front page are one
+# file instead of two that can drift. `xtask` is a member so `cargo xtask` builds it, and
+# unpublished so the published surface stays a single crate.
 members = ["xtask"]
-# `fuzz` is a package of its own that `cargo-fuzz` drives with its own profile and its own
-# nightly toolchain, and it now sits inside the root package's directory tree — so it has
-# to be named here or Cargo tries to adopt it and refuses to build either one. (Distinct
-# from `package.exclude` above, which is about what `cargo package` ships.)
+# `fuzz` has its own profile and nightly toolchain and sits inside the root package's
+# directory tree, so it must be named here or Cargo adopts it and neither builds. Distinct
+# from `package.exclude` above, which is about what `cargo package` ships.
 exclude = ["fuzz"]
 
 [workspace.package]
 edition = "2024"
-# 1.88 is where `let` chains stabilised, and the code uses them throughout. The manifest
-# said 1.85 — the edition floor — which no compiler could actually build.
+# `let` chains, used throughout, stabilised in 1.88.
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/hupe1980/cim-rs"
@@ -84,10 +74,9 @@ cgmes2 = []
 # Read and write CGMES model sets packaged as zip archives.
 zip = ["dep:zip"]
 
-# The `cim` command line. Off by default so that using the crate as a library never
-# compiles a binary, and on for `cargo install cim-rs --features cli`. It pulls in `zip`
-# because a model set handed to a command line is as likely to be an archive as a
-# directory, and adds no dependency of its own.
+# The `cim` command line: `cargo install cim-rs --features cli`. Off by default so using the
+# crate as a library never compiles a binary. Implies `zip` — a model set given to a command
+# line is as often an archive as a directory — and adds no dependency of its own.
 cli = ["zip"]
 
 [dev-dependencies]
@@ -98,8 +87,8 @@ name = "cim"
 path = "src/bin/cim.rs"
 required-features = ["cli"]
 
-# Runnable library examples. The `cim` binary above is the tool; these are the API, one
-# task each — building a model, navigating one, exporting RDF, computing a change set.
+# The binary above is the tool; these are the API, one task each: building a model,
+# navigating one, exporting RDF, computing a change set.
 [[example]]
 name = "build_model"
 required-features = ["cgmes3"]
@@ -120,12 +109,9 @@ required-features = ["cgmes3"]
 name = "throughput"
 harness = false
 required-features = ["cgmes3"]
-# Cargo runs `[[bench]]` targets in test mode by default, so `cargo test` was *executing* the
-# benchmark — in a debug build, over the whole 112 MiB RealGrid model when the corpus is
-# present. That is twenty minutes of a developer's `cargo test` spent producing throughput
-# figures twenty times too low to mean anything, and CI paid for it twice, since the
-# conformance job runs `cargo bench` afterwards anyway. `cargo bench` still builds and runs
-# it; `cargo clippy --all-targets` still lints it.
+# Cargo runs `[[bench]]` targets in test mode by default, which makes `cargo test` execute
+# the benchmark in a debug build over the whole corpus. `cargo bench` runs it; `cargo clippy
+# --all-targets` lints it.
 test = false
 
 [package.metadata.docs.rs]

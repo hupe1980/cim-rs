@@ -54,20 +54,12 @@ enum Repr {
     /// A UUID value, stored as raw bytes (align 1, keeping `Mrid` at 24 bytes) with the
     /// spelling it was read in.
     ///
-    /// Two independent things about that spelling deviate in published files and both have
-    /// to be remembered, because a re-export is meant to reproduce the document: whether
-    /// the hyphens were left out, and how the hex digits were cased.
-    ///
-    /// Case is a bitmask over the 32 digit positions rather than one flag, because the
-    /// CGMES 2.4.15 boundary set is not merely upper case — it is *mixed*:
-    /// `_24C12434-E42B-497f-928F-119C6AE92079` has a lower-case `497f` inside otherwise
-    /// upper-case hex. A single flag normalizes that away and rewrites every identifier in
-    /// the file, which is what PowSyBl caught and no check inside this crate could: the
-    /// census records the identity *style* and never the text, and the round-trip compares
-    /// the sixteen bytes.
-    ///
-    /// A `u32` beside the bytes leaves `Mrid` at the same size it was, since the pointer
-    /// in the other variant already forced the alignment that was being padded to.
+    /// Two things about that spelling deviate in published files and a re-export has to
+    /// reproduce both: whether the hyphens were left out, and how the hex digits were cased.
+    /// Case is a bitmask over the 32 digit positions rather than a flag, because the CGMES
+    /// 2.4.15 boundary set is *mixed* — `_24C12434-E42B-497f-928F-119C6AE92079` has a
+    /// lower-case `497f` in otherwise upper-case hex. The `u32` costs nothing: the pointer
+    /// in the other variant already forced the alignment it pads into.
     Uuid {
         bytes: [u8; 16],
         /// Bit `i` set means hex digit `i` was written upper case.

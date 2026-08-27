@@ -312,9 +312,9 @@ fn wrap(body: &str) -> String {
 /// A value is the text of its own element and of no other.
 ///
 /// IEC 61970-552 property elements hold text, one `rdf:resource`, or an inline compound —
-/// never mixed content. A document that nests markup inside a value used to have that
-/// markup's text read *as* the value, and the value closed at the nested element's end
-/// tag: `<name><x>ignored</x></name>` came back as `ignored`.
+/// never mixed content, so nesting markup inside a value is malformed. The nested element is
+/// skipped with its content rather than donating its text: `<name><x>ignored</x></name>` is
+/// an empty name, not `ignored`.
 #[test]
 fn markup_nested_inside_a_value_does_not_become_the_value() {
     let doc = wrap(

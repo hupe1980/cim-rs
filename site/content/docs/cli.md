@@ -21,7 +21,7 @@ the public API — so a gap in the tool is a gap in the library.
 | `cim info <input>…` | What a model set contains: files, object counts, profile coverage, findings |
 | `cim validate <input>…` | Structural checks; exits 1 on any error |
 | `cim export <input>… --out DIR` | Write the model back as CIM/XML |
-| `cim rdf <input>… --out DIR` | Export as RDF, one graph per profile |
+| `cim rdf <input>… --out DIR` | Export as RDF, one graph per profile with data |
 | `cim diff <base> <target>` | Compute a `dm:DifferenceModel` |
 | `cim schema` | What the built-in vintages declare |
 
@@ -33,7 +33,7 @@ loaded into **one** model, which is what a CGMES profile set is.
 | Option | Effect |
 |---|---|
 | `-o`, `--out PATH` | Where to write — a directory, or a file for `diff` |
-| `--vintage KEY` | Which schema to read against (`cgmes3`, `cgmes2`); default is the first built in |
+| `--vintage KEY` | Which schema to read against (`cgmes3`, `cgmes2`); by default it is detected from the input |
 | `--profile KEY` | Restrict `rdf` and `diff` to one profile, e.g. `SSH` |
 | `--rule CODE` | Show only this rule in `validate`, e.g. `CIM0007` |
 | `--ntriples` | Write N-Triples rather than Turtle |
@@ -84,8 +84,8 @@ $ cim info MicroGrid-Type1-NL-MAS/
 ```
 
 ```bash
-# Both vintages in one binary; pick per invocation.
-cim info --vintage cgmes2 CGMES_v2.4.15_MicroGridTestConfiguration_T4_BE_BB_Complete_v2.zip
+# Both vintages in one binary. The document says which it is, so this needs no flag.
+cim info CGMES_v2.4.15_MicroGridTestConfiguration_T4_BE_BB_Complete_v2.zip
 
 # The change set as a document, the summary as commentary.
 cim diff before/ after/ > change_DIFF.xml
@@ -94,19 +94,28 @@ cim diff before/ after/ > change_DIFF.xml
 cim rdf model/ --out graphs/ --ntriples
 ```
 
+## Vintages
+
+CIM/XML declares its vocabulary in the document, so `cim` reads the vintage off the root
+element and `--vintage` is an override rather than a requirement. Forcing the wrong one is
+reported as `CIM0021` and exits 1, because a model read against the wrong schema resolves no
+class at all — an empty model, which otherwise looks like a clean load.
+
+```bash
+cim info model/                     # detected
+cim info model/ --vintage cgmes2    # forced; a mismatch is an error, not an empty result
+```
+
 ## Piping
 
 `cim` writes through a fallible writer rather than `println!`, so
 `cim info big-model/ | head` closes cleanly instead of panicking. A closed pipe is how a
 command is told it has said enough.
 
-**Standard output carries one thing at a time.** Where a command's *result* is a document —
+**Standard output carries one thing at a time.** Where a command's result is a document —
 `cim diff` without `--out` — the document is the whole of stdout and everything else goes to
-stderr: the added/removed/changed summary, and any change the statement syntax could not
-carry. So `cim diff a b > change_DIFF.xml` yields a file, not a file with a report appended
-to it, and `cim diff a b | xmllint --noout -` works. With `--out` the document is a file and
-stdout is free again, so the report goes there.
+stderr, so `cim diff a b > change_DIFF.xml` yields a file and `cim diff a b | xmllint --noout -`
+works. With `--out` the document is a file and the report goes to stdout instead.
 
-`cim rdf` follows the same rule in the other direction: the paths it wrote go to stdout
-(suppressed by `--quiet`), and the profiles it skipped for want of data go to stderr,
-because those are the caller not getting a file they might have expected.
+`cim rdf` follows the same rule: the paths it wrote go to stdout, the profiles it skipped for
+want of data go to stderr.
