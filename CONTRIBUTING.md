@@ -147,9 +147,9 @@ everything that can say no runs before anything irreversible.
 
 The tag is checked against the manifest first, because it costs nothing and is the mistake
 most easily made. Then the CI gates again under `--locked`, since a tag can be pushed at a
-commit CI never saw; then `cargo publish --dry-run`; then the `cim` binaries for five targets
-— Linux and macOS on both architectures, Windows on x86-64 — each with a SHA-256 beside it.
-Only then does the publish happen.
+commit CI never saw; then `cargo publish --dry-run`; then the `cim` binaries for four
+targets — Linux on both architectures, macOS on Apple silicon, Windows on x86-64 — each with
+a SHA-256 beside it. Only then does the publish happen.
 
 `workflow_dispatch` runs everything except the two publish steps, so the release path can be
 exercised without spending a version number to find out whether it works.
