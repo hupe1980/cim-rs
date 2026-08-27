@@ -22,6 +22,11 @@ pub fn emit(schemas: &[Schema], out_dir: &Path, check: bool) -> Result<()> {
     }
     planned.push((out_dir.join("mod.rs"), rustfmt(&emit_root(schemas))));
 
+    // There used to be a third thing generated here: a copy of the repository README, kept
+    // as the crate's own front page because the crate lived one directory down and the two
+    // files could drift. The crate is now the root package, so `readme = "README.md"` names
+    // the same file GitHub shows and there is nothing to synchronise.
+
     if check {
         let stale: Vec<String> = planned
             .iter()
@@ -274,6 +279,13 @@ use crate::schema::*;
             .map(|c| format!("ClassId({})", class_index[&c.name]))
             .collect();
         writeln!(s, "static ANC_{ci}: &[ClassId] = &[{}];", anc.join(", ")).unwrap();
+
+        let desc: Vec<String> = schema
+            .descendants(&class.name)
+            .iter()
+            .map(|n| format!("ClassId({})", class_index[*n]))
+            .collect();
+        writeln!(s, "static DESC_{ci}: &[ClassId] = &[{}];", desc.join(", ")).unwrap();
     }
     s.push('\n');
 
@@ -287,13 +299,17 @@ use crate::schema::*;
         writeln!(
             s,
             "    ClassDef {{ name: {}, ns: NsId({}), parent: {parent}, concrete: {}, \
-             profiles: {}, deprecated: {}, own_attrs: OWN_{ci}, all_attrs: ALL_{ci}, \
-             ancestors: ANC_{ci}, doc: {} }},",
+             profiles: {}, defined_in: {}, concrete_in: {}, deprecated: {}, compound: {}, \
+             own_attrs: OWN_{ci}, all_attrs: ALL_{ci}, ancestors: ANC_{ci}, \
+             descendants: DESC_{ci}, doc: {} }},",
             quote(&class.name.local),
             ns_index[class.name.ns.as_str()],
             class.concrete,
             class.profiles,
+            class.defined_in,
+            class.concrete_in,
             class.deprecated,
+            class.compound,
             quote(class.comment.as_deref().unwrap_or(""))
         )
         .unwrap();
@@ -311,6 +327,10 @@ use crate::schema::*;
             },
             AttrKind::Enumeration(e) => match enum_index.get(e) {
                 Some(i) => format!("AttrKind::Enumeration(EnumId({i}))"),
+                None => "AttrKind::Primitive(Primitive::String)".to_owned(),
+            },
+            AttrKind::Compound(c) => match class_index.get(c) {
+                Some(i) => format!("AttrKind::Compound(ClassId({i}))"),
                 None => "AttrKind::Primitive(Primitive::String)".to_owned(),
             },
             AttrKind::Association {
@@ -627,12 +647,16 @@ fn emit_views(schema: &Schema) -> String {
 //! A view is a zero-cost wrapper around an [`Object`](crate::object::Object) that gives
 //! schema-checked, typed access to the attributes of one class. Views borrow rather than
 //! own, so obtaining one never copies model data.
+//!
+//! Compound types — structured values without identity, such as `StreetAddress` — get a
+//! view over [`Compound`](crate::object::Compound) instead, since they are stored inline
+//! rather than as objects of their own.
 
 #![allow(clippy::all, non_upper_case_globals, non_snake_case)]
 
 use crate::dataset::Dataset;
 use crate::mrid::Mrid;
-use crate::object::Object;
+use crate::object::{Compound, Object};
 use crate::schema::{ClassId, EnumValueId};
 use crate::view::{TypedView, TypedRef};
 
@@ -645,24 +669,40 @@ use super::names::{attributes as attrs, classes};
         let ident = rust_type(&class.name.local);
         let class_const = rust_const(&class.name.local);
         let doc = doc_comment(class.comment.as_deref(), 0);
-        writeln!(
-            s,
-            "{doc}#[derive(Clone, Copy, Debug)]\npub struct {ident}<'a>(pub &'a Object);\n"
-        )
-        .unwrap();
 
-        writeln!(
-            s,
-            "impl<'a> TypedView<'a> for {ident}<'a> {{\n    const CLASS: ClassId = classes::{class_const};\n    #[inline]\n    fn from_object(o: &'a Object) -> Self {{ {ident}(o) }}\n    #[inline]\n    fn object(&self) -> &'a Object {{ self.0 }}\n}}\n"
-        )
-        .unwrap();
+        if class.compound {
+            // A compound has no mRID and cannot be a dataset object, so it gets a view
+            // over the inline value rather than a `TypedView` impl.
+            writeln!(
+                s,
+                "{doc}///\n/// A compound value: stored inline inside the attribute that holds it, with no\n/// identity of its own (IEC 61970-552).\n#[derive(Clone, Copy, Debug)]\npub struct {ident}<'a>(pub &'a Compound);\n"
+            )
+            .unwrap();
+            writeln!(
+                s,
+                "impl<'a> {ident}<'a> {{\n    /// The compound's type.\n    pub const CLASS: ClassId = classes::{class_const};\n"
+            )
+            .unwrap();
+        } else {
+            writeln!(
+                s,
+                "{doc}#[derive(Clone, Copy, Debug)]\npub struct {ident}<'a>(pub &'a Object);\n"
+            )
+            .unwrap();
 
-        writeln!(s, "impl<'a> {ident}<'a> {{").unwrap();
-        writeln!(
-            s,
-            "    /// The object's master resource identifier.\n    #[inline]\n    pub fn mrid(&self) -> &'a Mrid {{ self.0.mrid() }}\n"
-        )
-        .unwrap();
+            writeln!(
+                s,
+                "impl<'a> TypedView<'a> for {ident}<'a> {{\n    const CLASS: ClassId = classes::{class_const};\n    #[inline]\n    fn from_object(o: &'a Object) -> Self {{ {ident}(o) }}\n    #[inline]\n    fn object(&self) -> &'a Object {{ self.0 }}\n}}\n"
+            )
+            .unwrap();
+
+            writeln!(s, "impl<'a> {ident}<'a> {{").unwrap();
+            writeln!(
+                s,
+                "    /// The object's master resource identifier.\n    #[inline]\n    pub fn mrid(&self) -> &'a Mrid {{ self.0.mrid() }}\n"
+            )
+            .unwrap();
+        }
 
         // Assign method names most-derived first, so a subclass attribute keeps the
         // plain name and a shadowed inherited one is qualified by its declaring class.
@@ -714,13 +754,29 @@ fn emit_accessor(
             if many {
                 writeln!(
                     s,
-                    "{doc}    pub fn {method}(&self) -> impl Iterator<Item = {ty}> + '_ {{\n        self.0.get_all({path}).iter().filter_map(|s| s.value.{conv})\n    }}\n"
+                    "{doc}    pub fn {method}(&self) -> impl Iterator<Item = {ty}> + use<'a> {{\n        self.0.all({path}).filter_map(|v| v.{conv})\n    }}\n"
                 )
                 .unwrap();
             } else {
                 writeln!(
                     s,
                     "{doc}    #[inline]\n    pub fn {method}(&self) -> Option<{ty}> {{\n        self.0.get({path}).and_then(|v| v.{conv})\n    }}\n"
+                )
+                .unwrap();
+            }
+        }
+        AttrKind::Compound(c) => {
+            let target_ty = rust_type(&c.local);
+            if many {
+                writeln!(
+                    s,
+                    "{doc}    pub fn {method}(&self) -> impl Iterator<Item = {target_ty}<'a>> + use<'a> {{\n        self.0.all({path}).filter_map(|v| v.as_compound()).map({target_ty})\n    }}\n"
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    s,
+                    "{doc}    #[inline]\n    pub fn {method}(&self) -> Option<{target_ty}<'a>> {{\n        self.0.get({path}).and_then(|v| v.as_compound()).map({target_ty})\n    }}\n"
                 )
                 .unwrap();
             }
@@ -748,7 +804,7 @@ fn emit_accessor(
             if many {
                 writeln!(
                     s,
-                    "{doc}{unit_doc}    pub fn {method}(&self) -> impl Iterator<Item = {ty}> + '_ {{\n        self.0.get_all({path}).iter().filter_map(|s| s.value.{conv})\n    }}\n"
+                    "{doc}{unit_doc}    pub fn {method}(&self) -> impl Iterator<Item = {ty}> + use<'a> {{\n        self.0.all({path}).filter_map(|v| v.{conv})\n    }}\n"
                 )
                 .unwrap();
             } else {
@@ -763,7 +819,7 @@ fn emit_accessor(
             if many {
                 writeln!(
                     s,
-                    "{doc}    pub fn {method}(&self) -> impl Iterator<Item = EnumValueId> + '_ {{\n        self.0.get_all({path}).iter().filter_map(|s| s.value.as_enum())\n    }}\n"
+                    "{doc}    pub fn {method}(&self) -> impl Iterator<Item = EnumValueId> + use<'a> {{\n        self.0.all({path}).filter_map(|v| v.as_enum())\n    }}\n"
                 )
                 .unwrap();
             } else {
@@ -779,13 +835,15 @@ fn emit_accessor(
             if many {
                 writeln!(
                     s,
-                    "{doc}    pub fn {method}(&self) -> impl Iterator<Item = TypedRef<{target_ty}<'static>>> + '_ {{\n        self.0.get_all({path}).iter().filter_map(|s| s.value.as_reference()).map(|m| TypedRef::new(m.clone()))\n    }}\n"
+                    "{doc}    pub fn {method}(&self) -> impl Iterator<Item = TypedRef<{target_ty}<'static>>> + use<'a> {{\n        self.0.all({path}).filter_map(|v| v.as_reference()).map(|m| TypedRef::new(m.clone()))\n    }}\n"
                 )
                 .unwrap();
-                // Resolving convenience that walks the dataset.
+                // Resolving convenience that walks the dataset. Capturing both lifetimes
+                // explicitly keeps this allocation-free: the stored mRIDs are borrowed
+                // rather than collected into a temporary.
                 writeln!(
                     s,
-                    "    /// Resolve every `{}` through `dataset`, skipping unresolved references.\n    pub fn {method}_in<'d>(&self, dataset: &'d Dataset) -> impl Iterator<Item = {target_ty}<'d>> + 'd {{\n        let mrids: Vec<Mrid> = self.0.get_all({path}).iter().filter_map(|s| s.value.as_reference().cloned()).collect();\n        mrids.into_iter().filter_map(move |m| dataset.by_mrid(&m).map(|o| {target_ty}(o)))\n    }}\n",
+                    "    /// Resolve every `{}` through `dataset`, skipping unresolved references.\n    pub fn {method}_in<'d>(&self, dataset: &'d Dataset) -> impl Iterator<Item = {target_ty}<'d>> + use<'a, 'd> {{\n        self.0.all({path}).filter_map(|v| v.as_reference()).filter_map(move |m| dataset.by_mrid(m).map({target_ty}))\n    }}\n",
                     attr.label
                 )
                 .unwrap();
@@ -797,7 +855,7 @@ fn emit_accessor(
                 .unwrap();
                 writeln!(
                     s,
-                    "    /// Resolve `{}` through `dataset`.\n    #[inline]\n    pub fn {method}_in<'d>(&self, dataset: &'d Dataset) -> Option<{target_ty}<'d>> {{\n        let m = self.0.get({path})?.as_reference()?;\n        dataset.by_mrid(m).map(|o| {target_ty}(o))\n    }}\n",
+                    "    /// Resolve `{}` through `dataset`.\n    #[inline]\n    pub fn {method}_in<'d>(&self, dataset: &'d Dataset) -> Option<{target_ty}<'d>> {{\n        let m = self.0.get({path})?.as_reference()?;\n        dataset.by_mrid(m).map({target_ty})\n    }}\n",
                     attr.label
                 )
                 .unwrap();
@@ -811,7 +869,9 @@ fn primitive_accessor(p: Primitive) -> (&'static str, &'static str) {
         Primitive::Boolean => ("bool", "as_bool()"),
         Primitive::Integer => ("i64", "as_i64()"),
         Primitive::Float | Primitive::Decimal => ("f64", "as_f64()"),
-        _ => ("&str", "as_str()"),
+        // Tied to the view's own lifetime, not to `&self`, so a borrowed string outlives
+        // the accessor call and iterators over one need no intermediate collection.
+        _ => ("&'a str", "as_str()"),
     }
 }
 

@@ -28,11 +28,30 @@ jobs:
       - name: Tests without the standards corpus
         run: cargo test --workspace --all-features
       - name: Benchmarks compile and run on synthetic data
-        run: cargo bench -p cim --features cgmes3
+        run: cargo bench -p cim-rs --features cgmes3
+      # `build_model` needs no input at all, so it is the one example that can be *run*
+      # without the standards corpus — and it exercises the whole write path: sparse
+      # storage, profile provenance, validation, element-class selection, derived header.
+      - name: Example that needs no corpus
+        run: |
+          cargo run --release --example build_model --features cgmes3 > built_EQ.xml
+          xmllint --noout built_EQ.xml
       - name: Documentation
         run: cargo doc --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
+      # The crate is the repository's root package, so "one published crate and nothing
+      # else" is a property of `exclude` rather than of the directory layout. `cargo
+      # package` builds the tarball standalone, which is what catches both a leak of the
+      # repository's machinery and a file the library needs but does not ship.
+      - name: Published tarball is the library and nothing else
+        run: |
+          cargo package --allow-dirty
+          # `site/content` is shipped on purpose — its Rust examples are doctests, so
+          # leaving them out would make the tarball's own test suite unrunnable. The
+          # site's presentation is not shipped, and neither is anything else.
+          ! cargo package --allow-dirty --no-verify --list \
+            | grep -E '^(xtask|fuzz|specs|\.github|\.cargo)/|^site/(templates|static|public)/|^site/config'
 
   # Each vintage must stand alone: a program targeting CGMES 3.0 should not have to
   # compile the 2.4.15 tables, and vice versa.
@@ -47,14 +66,22 @@ jobs:
           - "--no-default-features --features cgmes3"
           - "--no-default-features --features cgmes2"
           - "--no-default-features --features zip"
+          - "--no-default-features --features cgmes2,zip"
           - "--no-default-features --features cgmes3,cgmes2,zip"
+          - "--no-default-features --features cli,cgmes3"
+          - "--no-default-features --features cli,cgmes2"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy -p cim ${{ matrix.features }} --all-targets
+      - run: cargo clippy -p cim-rs ${{ matrix.features }} --all-targets
+      # `--all-targets` does not build doctests, so the README and the guide were the one
+      # part of the crate this matrix never compiled — and they were the part that broke,
+      # since their examples name a vintage. Running them here is what makes the matrix
+      # cover the whole crate rather than nearly all of it.
+      - run: cargo test -p cim-rs ${{ matrix.features }} --doc
 
   # Full conformance: fetch the published ENTSO-E artifacts, check the committed
   # generated sources still match them, then run the corpus-backed tests.
@@ -69,24 +96,159 @@ jobs:
         uses: actions/cache@v4
         with:
           path: specs
-          key: specs-${{ hashFiles('scripts/fetch-specs.sh') }}
+          key: specs-${{ hashFiles('xtask/src/specs.rs') }}
       - name: Fetch standards artifacts
-        run: scripts/fetch-specs.sh
+        run: cargo xtask fetch-specs
       - name: Generated sources match the RDFS vocabularies
         run: cargo xtask codegen --check
       - name: Conformity corpus tests
         run: cargo test --workspace --all-features --release
+      # The command line is the crate's front door for anyone evaluating it, so it is run
+      # against real models rather than only compiled. `diff` additionally proves the
+      # computed change set is a document an XML parser that is not ours accepts, and
+      # `export` that a re-exported model set is too.
+      #
+      # `diff` runs *both* ways on purpose. Driving it only with `--out` is what let the
+      # redirected form — the one the README shows — go on appending a diagnostics report to
+      # the document it had just written to the same stream. `tests/cli.rs` pins the
+      # separation on a model built for it; this pins it on a published one.
+      - name: Command line against a published model set
+        run: |
+          root=specs/test-models/cas-3.0.3/CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0
+          model="$root/MicroGrid/MicroGrid-Type1/MicroGrid-Type1-NL-MAS"
+          base="$root/MicroGrid/MicroGid-BaseCase/MicroGrid-NL-MAS"
+          cargo build --release --bin cim --features cli,cgmes3,cgmes2
+          cim=target/release/cim
+          "$cim" schema
+          "$cim" info "$model"
+          "$cim" export "$model" --out exported/
+          "$cim" rdf "$model" --out graphs/ --ntriples
+          "$cim" diff "$base" "$model" --out change_DIFF.xml
+          "$cim" diff "$base" "$model" > redirected_DIFF.xml
+          xmllint --noout change_DIFF.xml redirected_DIFF.xml exported/*.xml
+          cmp change_DIFF.xml redirected_DIFF.xml
+      # The examples are the library's front door, so they run against real models too.
+      - name: Examples against a published model set
+        run: |
+          root=specs/test-models/cas-3.0.3/CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0
+          model="$root/MicroGrid/MicroGrid-Type1/MicroGrid-Type1-NL-MAS"
+          cargo run --release --example inspect --features cgmes3 -- "$model" > /dev/null
+          cargo run --release --example to_rdf --features cgmes3 -- "$model" EQ > eq.ttl
+          cargo run --release --example changes --features cgmes3 -- \
+            "$root/MicroGrid/MicroGid-BaseCase/MicroGrid-NL-MAS" "$model" > computed_DIFF.xml
+          xmllint --noout computed_DIFF.xml
       - name: Throughput against the largest published model
-        run: cargo bench -p cim --features cgmes3
+        run: cargo bench -p cim-rs --features cgmes3
+
+  # Interoperability: the RDF the crate emits must be loadable by an ordinary RDF
+  # toolchain and pass ENTSO-E's own SHACL shapes. Running SHACL is deliberately not this
+  # crate's job, so the proof is a real engine — `pyshacl` — rather than a Rust test.
+  shacl:
+    name: RDF output against ENTSO-E's SHACL shapes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache downloaded standards artifacts
+        uses: actions/cache@v4
+        with:
+          path: specs
+          key: specs-${{ hashFiles('xtask/src/specs.rs') }}
+      - name: Fetch standards artifacts
+        run: cargo xtask fetch-specs
+      - name: Install a SHACL engine
+        run: pip install pyshacl
+      - name: Validate every profile of the published conformity models
+        run: |
+          root=specs/test-models/cas-3.0.3/CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0
+          for model in FullGrid/FullGrid-Merged MiniGrid/MiniGrid-Merged \
+                       MicroGrid/MicroGrid-Type1 PowerFlow/PowerFlow \
+                       SmallGrid/SmallGrid-Merged Svedala/Svedala-Merged; do
+            echo "::group::$model"
+            cargo xtask shacl "$root/$model"
+            echo "::endgroup::"
+          done
+
+  # Cross-validation: implementations that are not ours, reading what we write.
+  #
+  # Every other job here checks this repository against itself — our census against our
+  # parse, our grammar checkers against our output. A writer and a reader that share a
+  # misconception agree perfectly, so none of it can rule one out. PowSyBl can: it imports
+  # CGMES through an RDF4J triple store and SPARQL, where cim-rs uses a purpose-built
+  # parser, and it must build the identical network from our re-export as from the
+  # published originals — down to a digest over every identifier.
+  crossvalidate:
+    name: PowSyBl and rdflib read our output
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache downloaded standards artifacts
+        uses: actions/cache@v4
+        with:
+          path: specs
+          key: specs-${{ hashFiles('xtask/src/specs.rs') }}
+      - name: Fetch standards artifacts
+        run: cargo xtask fetch-specs
+      # The images build from scratch each run. Layer caching would need buildx wired to an
+      # external cache, which is machinery to save a Maven download on a job that already
+      # fetches the standards corpus — not worth the moving parts.
+      #
+      # The *assembled* configurations, because a single authority's IGM has no boundary
+      # set: PowSyBl cannot resolve its tie lines and builds nothing, which would make the
+      # comparison vacuous rather than failing.
+      - name: Cross-validate the assembled conformity models
+        run: |
+          root=specs/test-models/cas-3.0.3/CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0
+          for model in MicroGrid/MicroGrid-Type1/MicroGrid-Type1-Merged \
+                       MiniGrid/MiniGrid-Merged \
+                       SmallGrid/SmallGrid-Merged \
+                       FullGrid/FullGrid-Merged; do
+            echo "::group::$model"
+            cargo xtask crossvalidate "$root/$model"
+            echo "::endgroup::"
+          done
+      # The older vintage too, and not for symmetry: it is the one in production use across
+      # Europe, it ships as archives rather than directories, and its boundary set is where
+      # the mixed-case identifiers live that this check was what finally caught.
+      - name: Cross-validate CGMES 2.4.15
+        run: |
+          archive=specs/test-models/cas-2.0/MicroGrid/BaseCase_BC/CGMES_v2.4.15_MicroGridTestConfiguration_BC_Assembled_v2.zip
+          cargo xtask crossvalidate "$archive" --vintage cgmes2
+
+  # Portability, as a build rather than as a claim. "Pure Rust, no C dependencies, usable
+  # from WASM" is one of the crate's stated goals and was the only one nothing checked — and
+  # it is exactly the kind of property a single new dependency takes away silently.
+  #
+  # `wasm32-unknown-unknown` rather than `wasi`, because it is the strict one: it has no
+  # filesystem, so it is what a browser or an edge runtime actually offers. The library
+  # compiles for it; `Dataset::load` and friends are there for hosts that do have files, and
+  # the reader takes any `BufRead`, so a WASM caller feeds it bytes it already holds.
+  wasm:
+    name: wasm32 target builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p cim-rs --target wasm32-unknown-unknown --no-default-features --features cgmes3
+      - run: cargo build -p cim-rs --target wasm32-unknown-unknown --no-default-features --features cgmes2,zip
 
   msrv:
     name: minimum supported Rust version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build -p cim --all-features
+      - run: cargo build -p cim-rs --all-features
 
   fuzz:
     name: fuzz targets build

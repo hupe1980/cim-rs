@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero">
+  <div class="wrap">
+    <div>
+      <span class="eyebrow">IEC 61970 · CGMES 3.0 &amp; 2.4.15</span>
+      <h1>Grid models that survive the round trip.</h1>
+      <p class="lede">
+        <strong>cim-rs</strong> reads, navigates, validates and writes CIM/CGMES power-system
+        models in Rust — and writes them back <strong>file for file, object for object, in the
+        same serialized form</strong> the published ENTSO-E conformity models use.
+      </p>
+      <div class="cta">
+        <a class="btn btn-primary" href="{{ get_url(path='@/docs/getting-started.md') | safe }}">Get started</a>
+        <a class="btn btn-ghost" href="{{ config.extra.repository }}" rel="noopener">View source</a>
+      </div>
+      <div class="stats">
+        <div><b>523,842</b><span>objects read, zero errors</span></div>
+        <div><b>343 MiB/s</b><span>streaming CIM/XML read</span></div>
+        <div><b>1</b><span>mandatory dependency</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="landing">
+{{ section.content | safe }}
+</div>
+{% endblock %}

@@ -145,7 +145,24 @@ pub fn parse_bytes(bytes: &[u8]) -> Result<Document> {
             }
             Event::Text(t) => {
                 if let Some((_, buf)) = pending.as_mut() {
-                    buf.push_str(&t.unescape()?);
+                    buf.push_str(&t.xml10_content()?);
+                }
+            }
+            // A reference is its own event, so dropping it would silently delete the
+            // character. The RDFS documentation strings are full of `&amp;` and `&lt;`,
+            // and they end up in the generated rustdoc.
+            Event::GeneralRef(r) => {
+                if let Some((_, buf)) = pending.as_mut() {
+                    match r.resolve_char_ref() {
+                        Ok(Some(c)) => buf.push(c),
+                        Ok(None) | Err(_) => {
+                            let name = r.decode()?;
+                            match quick_xml::escape::resolve_predefined_entity(&name) {
+                                Some(text) => buf.push_str(text),
+                                None => buf.push_str(&format!("&{name};")),
+                            }
+                        }
+                    }
                 }
             }
             Event::CData(t) => {
@@ -205,7 +222,9 @@ fn collect_namespaces(
     for attr in e.attributes().with_checks(false) {
         let attr = attr?;
         let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-        let val = attr.unescape_value()?.into_owned();
+        let val = attr
+            .normalized_value(quick_xml::XmlVersion::Explicit1_0)?
+            .into_owned();
         if let Some(prefix) = key.strip_prefix("xmlns:") {
             ns.insert(prefix.to_owned(), val);
         } else if key == "xmlns" {
@@ -239,10 +258,15 @@ fn attr_value(
         let attr = attr?;
         let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
         // Attribute names are QNames too; `rdf:about` must expand to the RDF namespace.
-        if let Some((prefix, local)) = key.split_once(':') {
-            if local == want && ns.get(prefix).map(String::as_str) == Some(RDF_NS) {
-                return Ok(Some(attr.unescape_value()?.trim().to_owned()));
-            }
+        if let Some((prefix, local)) = key.split_once(':')
+            && local == want
+            && ns.get(prefix).map(String::as_str) == Some(RDF_NS)
+        {
+            return Ok(Some(
+                attr.normalized_value(quick_xml::XmlVersion::Explicit1_0)?
+                    .trim()
+                    .to_owned(),
+            ));
         }
     }
     Ok(None)

@@ -1,0 +1,70 @@
+# Zola configuration for the cim-rs documentation site.
+#
+# Built and deployed by .github/workflows/site.yml. Everything the site needs is in this
+# directory: no theme submodule, no npm, no CDN — a page that fetches nothing renders the
+# same in ten years as it does today, and passes a strict content-security policy.
+
+base_url = "https://hupe1980.github.io/cim-rs"
+title = "cim-rs"
+description = "A Rust implementation of the IEC Common Information Model (CIM) for power systems: CGMES 3.0 and 2.4.15, streaming CIM/XML, profile-aware validation and typed RDF export."
+default_language = "en"
+author = "Frank Hübner"
+
+compile_sass = false
+minify_html = true
+build_search_index = true
+generate_feeds = true
+feed_filenames = ["atom.xml"]
+
+taxonomies = []
+
+[markdown]
+smart_punctuation = false
+bottom_footnotes = true
+insert_anchor_links = "right"
+
+# Highlighting is emitted as classes, with the palette in two stylesheets the page picks
+# between by colour scheme — so a dark-mode reader gets dark code without any JavaScript.
+[markdown.highlighting]
+style = "class"
+light_theme = "ayu-light"
+dark_theme = "ayu-dark"
+add_color_scheme = true
+
+[search]
+index_format = "elasticlunr_json"
+
+[extra]
+# Shown in the header and in structured data.
+repository = "https://github.com/hupe1980/cim-rs"
+crate = "https://crates.io/crates/cim-rs"
+api_docs = "https://docs.rs/cim-rs"
+license = "MIT OR Apache-2.0"
+# Keywords carried into <meta name="keywords"> and the JSON-LD description.
+keywords = "CIM, CGMES, IEC 61970, IEC 61970-552, Rust, power systems, grid model, RDF, SHACL, energy, TSO, ENTSO-E"
+
+# The documentation pages, in reading order. Zola can sort a section by weight, but the
+# sidebar has to render before the section is known on every page, so the order lives here.
+[[extra.nav]]
+name = "Docs"
+path = "docs/"
+
+[[extra.nav]]
+name = "API"
+path = "https://docs.rs/cim-rs"
+external = true
+
+[[extra.nav]]
+name = "crates.io"
+path = "https://crates.io/crates/cim-rs"
+external = true
+
+[[extra.nav]]
+name = "GitHub"
+path = "https://github.com/hupe1980/cim-rs"
+external = true
+
+[link_checker]
+# docs.rs answers 404 until the crate is first published, and crates.io likewise. Skipping
+# the prefix keeps `zola check` useful for everything else rather than permanently red.
+skip_prefixes = ["https://docs.rs/cim-rs", "https://crates.io/crates/cim-rs"]

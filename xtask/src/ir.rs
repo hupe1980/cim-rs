@@ -162,6 +162,9 @@ pub enum AttrKind {
     Datatype(Name),
     /// An enumeration, serialized as `rdf:resource` to `Enum.value`.
     Enumeration(Name),
+    /// A `Compound` — a structured value with no identity of its own, serialized inline
+    /// as a nested `rdf:parseType="Resource"` element rather than as a reference.
+    Compound(Name),
     /// An association to another class, serialized as `rdf:resource` to the target mRID.
     Association {
         target: Name,
@@ -197,7 +200,21 @@ pub struct Class {
     /// Attributes declared directly on this class (not inherited), sorted by local name.
     pub attributes: Vec<Attribute>,
     pub profiles: ProfileMask,
+    /// Profiles whose vocabulary *defines* this class rather than merely referring to it.
+    ///
+    /// A profile that only adds attributes to an object introduced elsewhere marks the
+    /// class with `cims:stereotype Description`. That is exactly the distinction
+    /// IEC 61970-552 draws between `rdf:ID` (this file introduces the object) and
+    /// `rdf:about` (this file updates an object defined elsewhere), so it decides how the
+    /// writer identifies each object. The Steady State Hypothesis profile marks every
+    /// class it touches; State Variables marks only `CsConverter` and `VsConverter`, which
+    /// is why published SV files identify `SvPowerFlow` with `rdf:ID`.
+    pub defined_in: ProfileMask,
+    /// Profiles that declare this class `concrete`, i.e. may hold instances of it.
+    pub concrete_in: ProfileMask,
     pub deprecated: bool,
+    /// `cims:stereotype Compound` — a value type without identity, serialized inline.
+    pub compound: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -256,6 +273,17 @@ impl Schema {
             }
         }
         out
+    }
+
+    /// `name` and every class that inherits from it, in schema order.
+    ///
+    /// Emitted into the tables so that "every `ACLineSegment`, subclasses included" is a
+    /// walk of a handful of per-class buckets rather than a scan of the whole dataset.
+    pub fn descendants(&self, name: &Name) -> Vec<&Name> {
+        self.classes
+            .keys()
+            .filter(|k| *k == name || self.ancestors(k).iter().any(|a| &a.name == name))
+            .collect()
     }
 
     /// All attributes visible on `name`: own attributes plus every inherited one,
@@ -334,10 +362,10 @@ pub fn build(vintage: &str, sources: &[ProfileSource]) -> Result<Schema> {
     let mut enum_locals: BTreeSet<String> = BTreeSet::new();
     for doc in &docs {
         for d in &doc.descriptions {
-            if stereotypes(d).any(|s| s == "enumeration") {
-                if let Ok(n) = Name::from_iri(&d.iri) {
-                    enum_locals.insert(n.local.clone());
-                }
+            if stereotypes(d).any(|s| s == "enumeration")
+                && let Ok(n) = Name::from_iri(&d.iri)
+            {
+                enum_locals.insert(n.local.clone());
             }
         }
     }
@@ -521,10 +549,29 @@ fn collect_types(
                 comment: comment.clone(),
                 attributes: Vec::new(),
                 profiles: 0,
+                defined_in: 0,
+                concrete_in: 0,
                 deprecated,
+                compound: false,
             });
+            let concrete = stereos.contains(&"concrete");
             c.profiles |= bit;
-            c.concrete |= stereos.contains(&"concrete");
+            c.concrete |= concrete;
+            c.compound |= stereos.contains(&"Compound");
+            if concrete {
+                c.concrete_in |= bit;
+            }
+            // `Description` marks a class this profile only *refers* to. Everything else
+            // it declares, it introduces — which is what `rdf:ID` means on export.
+            //
+            // Deliberately not also requiring `concrete` here: published models do
+            // instantiate classes their own profile declares abstract, and SmallGrid's
+            // Equipment file writes a bare `<cim:Switch rdf:ID="…">` that the Equipment
+            // vocabulary has no concrete declaration for. Refusing to call that a
+            // definition would rewrite it as `rdf:about` and change the file.
+            if !stereos.contains(&"Description") {
+                c.defined_in |= bit;
+            }
             c.deprecated |= deprecated;
             if c.parent.is_none() {
                 c.parent = parent;
@@ -720,6 +767,11 @@ fn classify_attribute(
         if schema.datatypes.contains_key(&range) {
             return Some(AttrKind::Datatype(range));
         }
+        // A compound has no identity, so it is never a reference: it is written inline as
+        // a nested `rdf:parseType="Resource"` element (IEC 61970-552).
+        if schema.classes.get(&range).is_some_and(|c| c.compound) {
+            return Some(AttrKind::Compound(range));
+        }
         let used = d
             .literal(&cims("AssociationUsed"))
             .map(|v| v.trim().eq_ignore_ascii_case("yes"))
@@ -734,7 +786,8 @@ fn classify_attribute(
         });
     }
 
-    // Plain attributes declare `cims:dataType`, either a primitive or a CIMDatatype.
+    // Plain attributes declare `cims:dataType`: a primitive, a CIMDatatype, an
+    // enumeration, or — since a compound is a value rather than a reference — a compound.
     let dt_iri = d.resource(&cims("dataType"))?;
     let dt = Name::from_iri(dt_iri).ok()?;
     if let Some(p) = Primitive::from_local(&dt.local) {
@@ -746,6 +799,11 @@ fn classify_attribute(
     if schema.enums.contains_key(&dt) {
         return Some(AttrKind::Enumeration(dt));
     }
+    // `Location.mainAddress` names `StreetAddress` through `cims:dataType`, not
+    // `rdfs:range`, because a compound is held rather than pointed at.
+    if schema.classes.get(&dt).is_some_and(|c| c.compound) {
+        return Some(AttrKind::Compound(dt));
+    }
     // Unknown datatype: fall back to a string-typed value rather than dropping data.
     Some(AttrKind::Primitive(Primitive::String))
 }
@@ -756,8 +814,39 @@ fn comment_of(d: &rdfs::Description) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// A profile that only annotates a class hierarchy does not define its base class either.
+///
+/// The `Description` stereotype marks a class a profile refers to rather than introduces,
+/// but the published vocabularies apply it unevenly. Steady State Hypothesis marks all 45
+/// of the classes it touches — except `Equipment`, which it declares concrete so that
+/// `<cim:Equipment rdf:about="…">` may carry `inService` for equipment whose own class it
+/// does not declare. Taken at face value that would make SSH the file that *introduces*
+/// every such object, and every published SSH file says otherwise.
+///
+/// The signal is in the hierarchy: a profile that marks `Switch` and `ACLineSegment` as
+/// descriptions is annotating equipment, so it is not introducing `Equipment` either.
+fn propagate_description(schema: &mut Schema) {
+    let mut annotating: BTreeMap<Name, ProfileMask> = BTreeMap::new();
+    for class in schema.classes.values() {
+        // Profiles in which this class is a description rather than a definition.
+        let described = class.profiles & !class.defined_in;
+        if described == 0 {
+            continue;
+        }
+        for ancestor in schema.ancestors(&class.name) {
+            *annotating.entry(ancestor.name.clone()).or_default() |= described;
+        }
+    }
+    for (name, mask) in annotating {
+        if let Some(c) = schema.classes.get_mut(&name) {
+            c.defined_in &= !mask;
+        }
+    }
+}
+
 /// Sort for determinism, assign namespace prefixes, and drop dangling parents.
 fn finish(schema: &mut Schema) {
+    propagate_description(schema);
     let known: BTreeSet<Name> = schema.classes.keys().cloned().collect();
     for class in schema.classes.values_mut() {
         if let Some(p) = &class.parent
@@ -796,6 +885,11 @@ fn well_known_prefix(ns: &str) -> Option<String> {
             "http://entsoe.eu/CIM/SchemaExtension/3/1#" => "entsoe",
             "http://iec.ch/TC57/61970-552/ModelDescription/1#" => "md",
             "http://iec.ch/TC57/61970-552/DifferenceModel/1#" => "dm",
+            // The difference-model vocabulary declares `rdf:Statements` and its fields, so
+            // the RDF namespace ends up in the schema's own table. It has exactly one
+            // conventional prefix, and a generated `ns4` for it would be a name no reader
+            // of a CIM document recognises.
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#" => "rdf",
             _ => return None,
         }
         .to_owned(),

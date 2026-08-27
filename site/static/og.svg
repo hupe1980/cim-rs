@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#12151b"/>
+      <stop offset="1" stop-color="#1d222c"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1200" height="6" fill="#ff9a62"/>
+
+  <g transform="translate(88 96)" fill="none" stroke="#ff9a62" stroke-width="5.5"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M0 62V22L14 0l14 22L42 0l14 22v40"/>
+    <path d="M0 44h56"/>
+  </g>
+
+  <text x="164" y="152" fill="#e6e9ef" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="54" font-weight="700" letter-spacing="-1.5">cim-rs</text>
+
+  <text x="88" y="278" fill="#ffffff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="66" font-weight="700" letter-spacing="-2.2">IEC CIM / CGMES</text>
+  <text x="88" y="356" fill="#ffffff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="66" font-weight="700" letter-spacing="-2.2">grid models in Rust</text>
+
+  <text x="88" y="424" fill="#a2aab8" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="29">Streaming CIM/XML · profile-aware validation · typed RDF export</text>
+
+  <g font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+    <text x="88" y="530" fill="#ff9a62" font-size="40" font-weight="700">523,842</text>
+    <text x="88" y="562" fill="#79818f" font-size="21">objects read, zero errors</text>
+
+    <text x="428" y="530" fill="#ff9a62" font-size="40" font-weight="700">343 MiB/s</text>
+    <text x="428" y="562" fill="#79818f" font-size="21">streaming read</text>
+
+    <text x="768" y="530" fill="#ff9a62" font-size="40" font-weight="700">CGMES 3.0 + 2.4.15</text>
+    <text x="768" y="562" fill="#79818f" font-size="21">both vintages, one crate</text>
+  </g>
+</svg>

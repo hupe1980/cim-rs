@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block structured_data %}
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": {{ page_title | json_encode | safe }},
+  "description": {{ page_desc | json_encode | safe }},
+  "url": "{{ page_url | safe }}",
+  "inLanguage": "en",
+  "author": { "@type": "Person", "name": {{ config.author | json_encode | safe }} },
+  "isPartOf": {
+    "@type": "TechArticle",
+    "name": "cim-rs documentation",
+    "url": "{{ get_url(path='@/docs/_index.md') | safe }}"
+  },
+  "about": {
+    "@type": "SoftwareSourceCode",
+    "name": "cim-rs",
+    "codeRepository": "{{ config.extra.repository }}",
+    "programmingLanguage": "Rust"
+  }
+}
+{% endblock %}
+
+{% block content %}
+<div class="wrap docs">
+  {% include "sidebar.html" %}
+  <article>
+    <h1>{{ page.title }}</h1>
+    {%- if page.description %}<p class="page-lede">{{ page.description }}</p>{% endif %}
+    {{ page.content | safe }}
+
+    <nav class="next" aria-label="Pagination">
+      <span>{% if page.lower %}<a href="{{ page.lower.permalink | safe }}">&larr; {{ page.lower.title }}</a>{% endif %}</span>
+      <span>{% if page.higher %}<a href="{{ page.higher.permalink | safe }}">{{ page.higher.title }} &rarr;</a>{% endif %}</span>
+    </nav>
+  </article>
+</div>
+{% endblock %}

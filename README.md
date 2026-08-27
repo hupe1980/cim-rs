@@ -3,78 +3,203 @@
 **A Rust implementation of the IEC Common Information Model for power systems.**
 
 [![CI](https://github.com/hupe1980/cim-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/hupe1980/cim-rs/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
+[![Docs](https://img.shields.io/badge/docs-hupe1980.github.io%2Fcim--rs-b8410f)](https://hupe1980.github.io/cim-rs/)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#licensing-and-attribution)
 
-`cim` reads, navigates, validates and writes CIM grid models in both profile sets European
-transmission system operators use: **CGMES 3.0** (IEC TS 61970-600-1/-2:2021) and
+`cim-rs` reads, navigates, validates and writes CIM grid models in both profile sets
+European transmission system operators use: **CGMES 3.0** (IEC TS 61970-600-1/-2:2021) and
 **CGMES 2.4.15**.
 
-It reads both published ENTSO-E conformity assessment corpora — 31 CGMES 3.0 model sets
-and 52 CGMES 2.4.15 archives, **523,842 objects in total** — without a single error, and
-round-trips them back into the file sets they came from without losing a value.
+It reads both published ENTSO-E conformity assessment corpora — 31 CGMES 3.0 model sets and
+52 CGMES 2.4.15 archives, **523,842 objects in total** — without a single error, and writes
+every one of them back **file for file, object for object, in the same serialized form** the
+published models use.
+
+It also exports the model as **ordinary RDF with every value typed from the profile**, so a
+CGMES dataset can be handed to a triple store or validated against ENTSO-E's own SHACL
+shapes — which CIM/XML itself cannot be — and it **computes** the `dm:DifferenceModel`
+between two model states, not only reads and applies one.
+
+📖 **[Documentation](https://hupe1980.github.io/cim-rs/)** ·
+🦀 **[API reference](https://docs.rs/cim-rs)**
 
 ```rust,no_run
-use cim::prelude::*;
-use cim::cgmes3::{SCHEMA, views::ACLineSegment};
+use cim_rs::prelude::*;
+use cim_rs::cgmes3::{SCHEMA, views::ACLineSegment};
 
 // A CGMES model is a *set* of profile files describing the same objects.
-let ds = Dataset::load(SCHEMA, [
-    "model_EQ.xml",   // equipment: ratings, connectivity
-    "model_SSH.xml",  // steady state hypothesis: dispatch, switch positions
-    "model_TP.xml",   // topology
-    "model_SV.xml",   // state variables: power flow results
-])?;
+let grid = Dataset::load_dir(SCHEMA, "MicroGrid-BE")?;
 
-for line in ds.view::<ACLineSegment>() {
-    let kv = line.base_voltage_in(&ds).and_then(|bv| bv.nominal_voltage());
+for line in grid.view::<ACLineSegment>() {
+    let kv = line.base_voltage_in(&grid).and_then(|bv| bv.nominal_voltage());
     println!("{:?}  {kv:?} kV  r={:?} x={:?}", line.name(), line.r(), line.x());
 }
 
-let report = cim::validate::validate(&ds);
+// Structural checks, against the profile rather than against a guess.
+let report = grid.validate();
 println!("{} findings", report.len());
-# Ok::<(), cim::Error>(())
+# Ok::<(), cim_rs::Error>(())
 ```
+
+## Install
+
+```bash
+cargo add cim-rs                       # the library
+cargo install cim-rs --features cli    # the `cim` command line
+```
+
+The package is `cim-rs`; the library it provides is `cim_rs`. (`cim` on crates.io has been
+taken since 2022 by an unrelated tool.)
+
+| Feature | Effect |
+|---|---|
+| `cgmes3` *(default)* | CGMES 3.0 schema, typed views and named constants |
+| `cgmes2` | CGMES 2.4.15 schema, typed views and named constants |
+| `zip` | Read and write model sets packaged as zip archives |
+| `cli` | The `cim` command line (implies `zip`) |
+
+Vintages are independent modules: enabling only the one you need keeps compile time and
+binary size down. Both can be on at once — identifiers are per-vintage, so they cannot be
+mixed by accident.
+
+## From a shell
+
+```bash
+cim info     MicroGrid-BE/                  # files, object counts, profile coverage, findings
+cim validate MicroGrid-BE/ --rule CIM0007   # exits 1 on any error
+cim export   MicroGrid-BE/ --out out/       # write the model back as the file set it came from
+cim rdf      MicroGrid-BE/ --out graphs/    # one typed RDF graph per profile with data
+cim diff     before/ after/ > change.xml    # the change set between two model states
+```
+
+Six subcommands over a model set given as files, archives or directories, adding no
+dependency of its own — see [the command-line reference][cli].
+
+Where a command's result is a document, the document is the whole of standard output and
+everything else goes to stderr, so the redirection above yields a file and not a file with a
+report appended to it.
 
 ## Why this exists
 
 The IEC CIM is the semantic model for exchanging power-grid data between EMS, DMS, market
 and planning systems. The mature tooling is Java (PowSyBl), C++ (libcimpp) and Python
-(PyCIM, CIMpy, pycgmes). Rust had no established implementation — yet Rust is exactly
-where the gap hurts: high-throughput model servers, embedded and edge grid controllers,
-WASM browser tooling, and safety-critical pipelines all want a fast, memory-safe,
+(PyCIM, CIMpy, pycgmes). Rust had no established implementation — yet Rust is exactly where
+the gap hurts: high-throughput model servers, embedded and edge grid controllers, WASM
+browser tooling, and safety-critical pipelines all want a fast, memory-safe,
 dependency-light CIM core.
 
 ## What makes it correct
 
-CGMES has three properties that a naive implementation gets wrong. `cim` is built around
-all three.
+CGMES has a handful of properties that a plausible-looking implementation gets wrong.
+`cim-rs` is built around all of them, and each is enforced by a test against the published
+conformity models.
 
-**A model is a set of files, not a file.** The same `SynchronousMachine` gets its ratings
-from EQ and its dispatch from SSH, under one identifier. [`Dataset`] merges objects by
-mRID across files, so load order does not matter and nothing is duplicated.
+* **A model is a set of files, not a file.** The same `SynchronousMachine` gets its ratings
+  from EQ and its dispatch from SSH, under one identifier. Objects merge by mRID, so load
+  order does not matter and nothing is duplicated. The one thing merging cannot decide is a
+  contradiction, so that is recorded and reported (`CIM0018`) rather than resolved silently.
+* **An identifier is a UUID, not the way somebody spelled it.** Published files write UUIDs
+  without hyphens, and references as absolute IRIs. Read as opaque text, those objects lose
+  their `urn:uuid:` name in RDF and split in two the moment another file spells the same
+  UUID the conforming way.
+* **Attributes are declared far more widely than they are used.** `IdentifiedObject.mRID`
+  is declared in ten of eleven profiles; writing from declarations alone inflated a 112 MiB
+  model to 399 MiB. Each value records which file it came from.
+* **A file may only name classes its own profile declares.** An SSH file writes
+  `<cim:Equipment rdf:about="…">` for an `ACLineSegment` — and never a class whose mandatory
+  attributes the data does not supply.
+* **`rdf:ID` versus `rdf:about` is a property of the class within the profile**, not of the
+  file. The RDFS says which is which; guessing from the profile keyword rewrote 49,255
+  identifiers in one published file.
+* **Compounds are values, not references.** `Location.mainAddress` holds a `StreetAddress`
+  inline, and those nest. A parser that treats the nested elements as text does not fail —
+  it fabricates a value.
+* **Tolerance costs a report.** Lenient reading is the default because published models
+  deviate, and everything the reader tolerates it also has to *say* — so the report is
+  bounded, and says where it stopped.
+* **Output has to satisfy someone else's parser.** Every document is checked against the XML
+  and XML Namespaces recommendations, and every RDF export against the N-Triples grammar,
+  across the whole published corpus. And by someone else's *implementation*: **PowSyBl**
+  builds the identical network from a `cim-rs` re-export as from the published originals —
+  same counts, same buses, same digest over every identifier — and **rdflib** parses the
+  RDF export as a graph. Both run in CI. A writer and a reader that share a misconception
+  agree with each other perfectly; this is what rules that out.
+* **Some things only the *syntax* forbids.** A value cannot hold a character XML 1.0 has no
+  representation for — most of the C0 range, escapes included — and `rdf:ID` is an `NCName`,
+  which an identifier a producer chose freely need not be. Neither can happen in a
+  conforming model, both arrive from a mis-encoded file, and neither is visible to a
+  well-formedness check: the second because such a document *is* well-formed XML, and the
+  first because the check shared the reader's parser until it was taught the character range
+  itself. Reported as `CIM0019` and `CIM0020`; never written.
 
-**Attributes are declared far more widely than they are used.** `IdentifiedObject.mRID` is
-declared in ten of eleven CGMES 3.0 profiles. Deciding what to write from declarations
-alone repeats every object in every profile file — in one measured case inflating a
-112 MiB model to 399 MiB. `cim` records, per value, **which profile's file it came from**,
-so an export reproduces the original file set.
+The reasoning behind each rule is in [the documentation][conformance] and in the rustdoc
+next to the code it governs.
 
-**Inheritance crosses profile boundaries.** The Steady State Hypothesis profile declares
-`Equipment.inService` without declaring `BusbarSection`, and real SSH files nonetheless
-set `inService` on busbar sections. Export decisions are made from what an object actually
-carries, never from class-level profile membership.
+## Standard RDF, with the datatypes CIM/XML omits
 
-**One file serves several profiles.** A CGMES Equipment file normally declares Equipment,
-Operation *and* ShortCircuit. Treating profiles one at a time either duplicates the whole
-file into each export or splits one input file into three. [`Dataset::save_as_loaded`]
-writes the model back as the file set it was read from, header declarations included.
+CIM/XML is not RDF/XML: it predates the W3C recommendation, `rdf:parseType="Statements"` is
+not RDF syntax, and `rdf:ID="_x"` denotes `urn:uuid:x` rather than a document fragment. The
+larger gap is that **it carries no datatype information at all** — every value is element
+text — while ENTSO-E's SHACL shapes constrain 3,137 properties by `sh:datatype`. ENTSO-E's
+own interoperability reporting names the missing piece: *"there are no open libraries to
+natively enhance the data based on the profile definitions."*
+
+```rust,no_run
+use cim_rs::prelude::*;
+use cim_rs::cgmes3::SCHEMA;
+use cim_rs::rdf::{RdfOptions, Syntax};
+
+# let grid = Dataset::load(SCHEMA, ["EQ.xml"])?;
+// One profile's graph, as a SHACL engine wants it.
+let eq = SCHEMA.profile_by_keyword("EQ").unwrap();
+let turtle = cim_rs::rdf::to_string(&grid, &RdfOptions::new(Syntax::Turtle).profiles(eq.mask()))?;
+# Ok::<(), cim_rs::Error>(())
+```
+
+```turtle
+<urn:uuid:0472a783-c766-11e1-8775-005056c00008>
+    a cim:ACLineSegment ;
+    cim:IdentifiedObject.name "BE-Line_1" ;
+    cim:ACLineSegment.r "2.2"^^xsd:float ;
+    cim:Equipment.aggregate "false"^^xsd:boolean ;
+    cim:ConductingEquipment.BaseVoltage <urn:uuid:5dc9b970-cc86-4a2b-9e1a-0e2c8b0e6e12> .
+```
+
+Exports are **per profile**, because ENTSO-E's shapes are — objects, element classes and the
+files' headers alike, so a Steady State Hypothesis graph is what an SSH file is and nothing
+more. A profile the model says nothing about gets no graph rather than one made of headers.
+`cargo xtask shacl` runs the whole thing against the published shapes with `pyshacl`, in CI;
+every profile that carries data, in every published CGMES 3.0 conformity model, conforms.
+[More][rdf]
+
+## Difference models
+
+IEC 61970-552's incremental exchange: the statements to retract, then the statements to
+assert. `cim-rs` reads one, applies one, writes one — and **computes** one, which is the
+operation an EMS performs every time it publishes an update.
+
+```rust,no_run
+use cim_rs::prelude::*;
+use cim_rs::cgmes3::SCHEMA;
+use cim_rs::diff::DiffOptions;
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let base = Dataset::load_dir(SCHEMA, "before")?;
+let updated = Dataset::load_dir(SCHEMA, "after")?;
+
+let change = base.difference_to(&updated, &DiffOptions::default());
+cim_rs::writer::write_difference(SCHEMA, &change.model, std::io::stdout(), &Default::default())?;
+# Ok(()) }
+```
+
+Applying a computed change set to its base reproduces the target exactly — every value
+present, none left over, class changes included. That is a test against the published
+conformity models rather than a claim. [More][diff]
 
 ## Design
 
-Two layers in one crate:
-
 ```text
-cim
+cim_rs
 ├── generated from the official RDFS vocabularies, one module per vintage
 │   ├── schema tables      classes, attributes, enums, datatypes, profiles
 │   ├── typed views        zero-cost accessors per class
@@ -82,7 +207,9 @@ cim
 └── hand-written, schema-agnostic
     ├── Dataset            object store, mRID index, multi-profile merge
     ├── reader / writer    streaming CIM/XML (IEC 61970-552)
+    ├── rdf                N-Triples / Turtle, typed from the profile
     ├── header             md:FullModel, dm:DifferenceModel
+    ├── diff               change sets computed from two model states
     └── validate           structural checks with stable rule codes
 ```
 
@@ -91,205 +218,116 @@ cim
 | CGMES 3.0 | `cgmes3` *(default)* | `CIM100` + `eu` | 443 | 3,624 | 51 | 11 |
 | CGMES 2.4.15 | `cgmes2` | `cim16` + `entsoe` | 401 | 3,539 | 48 | 12 |
 
-Objects are stored **sparsely** — only attributes actually present are kept. That is a
-match for the data, not a compromise: a `Terminal` has around thirty possible attributes
-and an SSH file sets exactly one. Typed access comes from generated zero-cost views rather
-than a generated struct per class, which keeps profile merging natural, memory
-proportional to real content, and compile times low.
+Objects are stored **sparsely** — only attributes actually present are kept. That is a match
+for the data, not a compromise: a `Terminal` has around thirty possible attributes and an
+SSH file sets exactly one. Typed access comes from generated zero-cost views rather than a
+struct per class, which keeps profile merging natural, memory proportional to real content,
+and compile times low.
 
 Everything model-specific is generated; everything else is written against the `schema`
 interface. **Adopting a new CIM vintage is a regeneration, not a rewrite** — and CGMES
-2.4.15 is the proof: a different namespace, a different extension prefix, an extra
-boundary profile, and vocabularies that predate the self-describing ontology header, all
-handled without a line of vintage-specific runtime code.
+2.4.15 is the proof: a different namespace, a different extension prefix, an extra boundary
+profile, and vocabularies that predate the self-describing ontology header, all handled
+without a line of vintage-specific runtime code. [More][concepts]
 
 ## Performance
 
-ENTSO-E `RealGrid` conformity model — 112 MiB, 188,547 objects, 1.1M values — release
-build, Apple M-series:
+ENTSO-E `RealGrid` conformity model — 112 MiB, 188,547 objects, 1.1M values — release build,
+Apple M-series. Documents are read from memory, so the numbers measure parsing.
 
 | | |
 |---|---|
-| Read | **0.45 s** (251 MiB/s, 422k objects/s) |
-| Write | **0.32 s** (353 MiB/s) |
-| Validate | **0.02 s** (9.5M objects/s) |
-| Inverse index | **0.02 s** |
+| Read | **0.33 s** (343 MiB/s, 576k objects/s) |
+| Write, as the file set it came from | **0.34 s** (335 MiB/s) |
+| Write as RDF (N-Triples, 1.3M triples) | **0.55 s** |
+| Validate | **0.04 s** (4.5M objects/s) |
+| Diff against another model state | **0.07 s** (2.6M objects/s) |
+| Inverse index | **0.03 s** |
 
-Reproduce with `cargo bench -p cim`. The benchmark also measures a synthetic model, so it
-runs without the standards corpus.
-
-## Installation
-
-```toml
-[dependencies]
-cim = "0.1"
-```
-
-Features:
-
-| Feature | Effect |
-|---|---|
-| `cgmes3` *(default)* | CGMES 3.0 schema, views and constants |
-| `cgmes2` | CGMES 2.4.15 schema, views and constants |
-| `zip` | Read and write CGMES model sets packaged as zip archives |
-
-Vintages are independent modules: enabling only the one you need keeps compile time and
-binary size down. Both can be on at once — identifiers are per-vintage, so they cannot be
-mixed by accident.
-
-## Usage
-
-### Loading and inspecting
-
-```rust,no_run
-use cim::prelude::*;
-use cim::cgmes3::SCHEMA;
-
-let mut ds = Dataset::new(SCHEMA);
-let load = ds.load_files(["EQ.xml", "SSH.xml"], &ReadOptions::lenient())?;
-
-// Nothing is ever silently dropped: deviations become structured diagnostics.
-for d in load.report.iter() {
-    println!("{d}");   // warning[CIM0002] EQ.xml: unknown property <cim:Vendor.x>, skipped
-}
-# Ok::<(), cim::Error>(())
-```
-
-`ReadOptions::lenient()` is the default because published models carry vendor extensions
-and identifier deviations. `ReadOptions::strict()` turns anything the schema does not
-define into a hard error.
-
-### Typed navigation
-
-```rust
-use cim::prelude::*;
-use cim::cgmes3::{SCHEMA, views::{Terminal, SynchronousMachine}};
-
-# let ds = Dataset::new(SCHEMA);
-for t in ds.view::<Terminal>() {
-    if let Some(eq) = t.conducting_equipment_in(&ds) {
-        println!("{:?} on {:?}, connected={:?}", t.name(), eq.name(), t.connected());
-    }
-}
-
-// Enumerations resolve to schema literals, not strings.
-for m in ds.view::<SynchronousMachine>() {
-    if let Some(kind) = m.type_() {
-        println!("{:?}: {}", m.name(), SCHEMA.enum_value(kind).name);
-    }
-}
-```
-
-Associations are stored as identifiers, because IEC 61970-501 serializes exactly one side
-of each. `x()` returns a `TypedRef`, `x_in(&dataset)` resolves it, and `InverseIndex`
-turns repeated reverse lookups into hash lookups.
-
-### Validation
-
-```rust
-use cim::prelude::*;
-use cim::cgmes3::SCHEMA;
-use cim::validate::{self, ValidateOptions};
-
-# let ds = Dataset::new(SCHEMA);
-let report = validate::validate_with(&ds, &ValidateOptions::thorough());
-for (rule, count) in report.summary() {
-    println!("{rule}: {count}");     // CIM0006: 43
-}
-if report.has_errors() { /* the model is not conforming */ }
-```
-
-Every finding carries a stable rule code (`CIM0001`–`CIM0015`), a severity, and the
-object, class, attribute and source file it concerns — so CI can filter and fail on
-specific classes of problem without matching message text.
-
-Checks cover what the RDFS vocabulary justifies: cardinality, datatypes, reference
-targets, reference resolution, identifier conformance, profile reach, abstract
-instantiation, and header structure. Semantic rules that ENTSO-E publishes as **SHACL
-shapes are out of scope** — run those with a SHACL engine against the same data.
-
-### Writing
-
-```rust,no_run
-use cim::prelude::*;
-use cim::cgmes3::SCHEMA;
-
-# let ds = Dataset::new(SCHEMA);
-# let dir = std::path::Path::new(".");
-// Write the model back as the file set it was read from, headers included.
-let saved = ds.save_as_loaded(dir)?;
-
-// Or one file per profile, for a model built programmatically.
-let written = ds.save_all_profiles(dir, "MyModel")?;
-# Ok::<(), cim::Error>(())
-```
-
-Output is deterministic — objects in mRID order, attributes in schema order — so
-re-writing an unchanged model is byte-identical and version diffs stay readable.
-
-### Difference models
-
-```rust,no_run
-use cim::prelude::*;
-use cim::cgmes3::SCHEMA;
-
-# let mut ds = Dataset::new(SCHEMA);
-# let bytes: &[u8] = b"";
-if let Some(diff) = cim::reader::read_difference(SCHEMA, bytes, None)? {
-    let report = ds.apply_difference(&diff);   // retract reverse, assert forward
-    println!("{} findings", report.len());
-}
-# Ok::<(), cim::Error>(())
-```
+Reproduce with `cargo bench -p cim-rs`; the benchmark also measures a synthetic model, so it
+runs without the standards corpus. Absolute figures move by 20% or more with machine load,
+so treat the ratios between rows as the stable part. [More][perf]
 
 ## Conformance
 
 | Standard | Role |
 |---|---|
 | IEC 61970-301:2020+AMD1:2022 | CIM base semantics (CIM17) |
-| IEC 61970-501 | RDFS profile representation — the codegen input |
+| IEC 61970-501:2006 | RDFS profile representation — the codegen input |
 | IEC 61970-552:2016 | CIM/XML format: identity, headers, difference models |
 | IEC TS 61970-600-1/-2:2021 | CGMES 3.0 profile set |
 
-Profiles supported: **EQ, OP, SC, EQBD, SSH, TP, SV, DL, GL, DY** and the header
-vocabulary in both vintages, plus **TPBD** in CGMES 2.4.15.
+Profiles supported: **EQ, OP, SC, EQBD, SSH, TP, SV, DL, GL, DY** and the header vocabulary
+in both vintages, plus **TPBD** in CGMES 2.4.15.
 
-Difference models are fully supported, including the reclassification the conformity
-tests exercise — a difference may replace a `LinearShuntCompensator` with a
-`NonlinearShuntCompensator` under the same identifier, and applying it changes the class.
-
-Reading is deliberately forgiving of published files that deviate, and never silently: a
-non-UUID identifier is kept and flagged; an enumeration literal written under the wrong
-namespace is recovered and flagged; an unparseable value is dropped and flagged. Every
-deviation is a [`Diagnostic`] with a stable rule code.
+Checked against the published models on every `cargo test` with the corpus present: reading
+both corpora with zero errors, per-file re-export, well-formedness under a conforming XML
+parser, the RDF export against the N-Triples grammar and ENTSO-E's SHACL shapes, semantic
+round-trip, difference models in both directions, pinned validation findings, and a
+deterministic mutation campaign, and cross-validation against PowSyBl (Java) and rdflib
+(Python) in pinned containers on both vintages. The library also builds for
+`wasm32-unknown-unknown` in CI, so "pure Rust, no C dependencies" is a build rather than a
+claim. 208 tests; corpus-backed tests skip cleanly on a fresh clone.
+[The full record][conformance]
 
 ## Development
 
 The standards artifacts are **not vendored**. Fetch them, then regenerate:
 
 ```bash
-scripts/fetch-specs.sh          # ENTSO-E RDFS + SHACL + conformity models -> specs/
-cargo xtask codegen             # RDFS -> crates/cim/src/generated/
+cargo xtask fetch-specs         # ENTSO-E RDFS + SHACL + conformity models -> specs/
+cargo xtask codegen             # RDFS -> src/generated/
+cargo xtask crossvalidate       # PowSyBl and rdflib read our output (needs Docker)
 cargo xtask codegen --check     # CI gate: committed sources match the vocabularies
 cargo xtask inspect             # summarise every parsed vintage
 cargo test --workspace --all-features
-cargo bench -p cim              # throughput, synthetic and (if fetched) RealGrid
+cargo bench -p cim-rs           # throughput, synthetic and (if fetched) RealGrid
+
+pip install pyshacl             # a real SHACL engine, for the interop check
+cargo xtask shacl               # RDF export vs. ENTSO-E's published shapes
 ```
+
+Every repository task is a subcommand of one program. `xtask` owns the artifact list as well
+as the vintage table, so `fetch-specs` finishes by asking the generator whether every
+vocabulary file it needs actually arrived.
+
+Running SHACL stays somebody else's job: there is no mature SHACL engine in Rust and writing
+one would be a second project, so `cargo xtask shacl` drives `pyshacl` and reads its report.
+Point `PYSHACL` at a virtualenv if the binary is not on `PATH`.
 
 Adding a vintage means adding an entry to `xtask/src/vintage.rs` — which RDFS files it is
 made of and, where the vocabularies do not say so themselves, the profile IRIs their
 instance files declare — then regenerating.
 
-Robustness is covered two ways: `crates/cim/tests/robustness.rs` runs a deterministic
-mutation campaign (truncation at every byte, single-byte corruption, region deletion) on
-stable as part of `cargo test`, and `fuzz/` holds `cargo-fuzz` targets for longer runs on
-nightly.
+**Examples.** Four runnable programs, one task each; `build_model` needs no input at all.
+
+```bash
+cargo run --example build_model --features cgmes3
+cargo run --example inspect     --features cgmes3 -- <model-dir>
+cargo run --example to_rdf      --features cgmes3 -- <model-dir> EQ
+cargo run --example changes     --features cgmes3 -- <base> <target>
+```
+
+**The site.** `site/` is a [Zola](https://www.getzola.org/) site, built and deployed to
+GitHub Pages by `.github/workflows/site.yml`:
+
+```bash
+cd site && zola serve      # http://127.0.0.1:1111
+cd site && zola check      # every internal and external link
+```
+
+**Layout.** `cim-rs` is the repository's root package, so `src/`, `tests/`, `benches/` and
+`examples/` sit at the top and this README is the crate's front page rather than a copy of
+it. The workspace has one other member, `xtask`, which is the generator and is never
+published; `fuzz/` is a separate package outside the workspace, as `cargo-fuzz` expects.
+`cargo package` ships the library, the binary and the examples and nothing else.
+
+Robustness is covered two ways: `tests/robustness.rs` runs a deterministic mutation campaign
+(truncation at every byte, single-byte corruption, region deletion) on stable as part of
+`cargo test`, and `fuzz/` holds `cargo-fuzz` targets for longer runs on nightly.
 
 `specs/` is gitignored. Generated sources **are** committed: builds stay reproducible and
-fast for downstream users, docs.rs works, and a schema change appears as a reviewable
-diff. Tests that need the corpus skip cleanly when it is absent, so a fresh clone is green.
-
-See [CONCEPT.md](CONCEPT.md) for the full design rationale and roadmap.
+fast for downstream users, docs.rs works, and a schema change appears as a reviewable diff.
 
 ## Licensing and attribution
 
@@ -302,3 +340,10 @@ here, and nothing in the build or test pipeline depends on them.
 
 The ENTSO-E conformity test models are licensed **CC BY-SA 4.0** and owned by ENTSO-E. They
 are used as a local test corpus only and are never redistributed with this crate.
+
+[cli]: https://hupe1980.github.io/cim-rs/docs/cli/
+[rdf]: https://hupe1980.github.io/cim-rs/docs/rdf/
+[diff]: https://hupe1980.github.io/cim-rs/docs/difference-models/
+[concepts]: https://hupe1980.github.io/cim-rs/docs/concepts/
+[perf]: https://hupe1980.github.io/cim-rs/docs/performance/
+[conformance]: https://hupe1980.github.io/cim-rs/docs/conformance/

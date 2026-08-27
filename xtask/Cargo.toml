@@ -9,3 +9,6 @@ license.workspace = true
 [dependencies]
 quick-xml.workspace = true
 anyhow.workspace = true
+ureq = { version = "3.4.0", default-features = false, features = ["rustls"] }
+zip = { version = "7.2.0", default-features = false, features = ["deflate"] }
+sha2 = "0.11.0"

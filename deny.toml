@@ -1,6 +1,14 @@
 # cargo-deny configuration. The dependency tree is deliberately tiny, so the policy can
 # be strict.
 
+[graph]
+# The policy exists to protect people who depend on `cim`, and `xtask` is never published:
+# it is the repository's own tooling, and it needs an HTTP client and a zip reader to fetch
+# the standards artifacts. Holding a build tool to the same licence and advisory bar as the
+# library would either weaken the bar for the library — the only place it matters — or ban
+# a dev dependency for a reason that reaches no user.
+exclude = ["xtask"]
+
 [advisories]
 version = 2
 yanked = "deny"

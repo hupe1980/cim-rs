@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block structured_data %}
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": {{ page_title | json_encode | safe }},
+  "description": {{ page_desc | json_encode | safe }},
+  "url": "{{ page_url | safe }}",
+  "inLanguage": "en",
+  "author": { "@type": "Person", "name": {{ config.author | json_encode | safe }} },
+  "isPartOf": {
+    "@type": "TechArticle",
+    "name": "cim-rs documentation",
+    "url": "{{ get_url(path='@/docs/_index.md') | safe }}"
+  },
+  "about": {
+    "@type": "SoftwareSourceCode",
+    "name": "cim-rs",
+    "codeRepository": "{{ config.extra.repository }}",
+    "programmingLanguage": "Rust"
+  }
+}
+{% endblock %}
+
+{% block content %}
+<div class="wrap docs">
+  {% include "sidebar.html" %}
+  <article>
+    <h1>{{ section.title }}</h1>
+    {%- if section.description %}<p class="page-lede">{{ section.description }}</p>{% endif %}
+    {{ section.content | safe }}
+  </article>
+</div>
+{% endblock %}

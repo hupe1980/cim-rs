@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Cross-validation harness: PowSyBl reading what cim-rs writes.
+
+  This project is repository machinery and is never published. It exists so that a real,
+  independently written CGMES implementation can be pointed at cim-rs's output, which is
+  the only way to check a claim cim-rs cannot check about itself.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>dev.cimrs</groupId>
+  <artifactId>crossvalidate</artifactId>
+  <version>1.0</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- Pinned, not floating: a cross-validation whose reference implementation changes
+         underneath it reports differences that are the other project's release notes. -->
+    <powsybl.version>7.3.0</powsybl.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.powsybl</groupId>
+        <artifactId>powsybl-core</artifactId>
+        <version>${powsybl.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- The CGMES importer under test as a reader of our output. -->
+    <dependency>
+      <groupId>com.powsybl</groupId>
+      <artifactId>powsybl-cgmes-conversion</artifactId>
+    </dependency>
+    <!-- The in-memory network the importer builds into. -->
+    <dependency>
+      <groupId>com.powsybl</groupId>
+      <artifactId>powsybl-iidm-impl</artifactId>
+    </dependency>
+    <!-- PowSyBl's CGMES importer loads the instance files into a triple store and queries
+         it with SPARQL, so it needs an implementation of that store as well as the
+         importer itself. Without one it fails with "No implementation available for triple
+         store rdf4j" at read time rather than at startup.
+
+         Worth noting for what this cross-validation is: PowSyBl reads CGMES by way of a
+         general RDF toolchain, where cim-rs reads it with a purpose-built parser for the
+         61970-552 subset. Two implementations sharing a misconception is exactly what a
+         self-check cannot rule out — two that do not even share an approach is as
+         independent as this gets. -->
+    <dependency>
+      <groupId>com.powsybl</groupId>
+      <artifactId>powsybl-triple-store-impl-rdf4j</artifactId>
+    </dependency>
+    <!-- PowSyBl resolves its configuration through a service; without an implementation on
+         the classpath the importer fails at startup rather than at read time. -->
+    <dependency>
+      <groupId>com.powsybl</groupId>
+      <artifactId>powsybl-config-classic</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>2.0.16</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>crossvalidate</finalName>
+    <plugins>
+      <!-- One self-contained jar, so the container's entrypoint is `java -jar` and needs
+           no classpath assembled at run time. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <transformers>
+                <!-- PowSyBl discovers importers, exporters and its configuration through
+                     `META-INF/services`. A plain shaded jar keeps only the last file of
+                     each name, which silently removes every provider but one — the
+                     failure mode is "no importer found for CGMES", far from its cause. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>dev.cimrs.Summarize</mainClass>
+                </transformer>
+              </transformers>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                    <exclude>module-info.class</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

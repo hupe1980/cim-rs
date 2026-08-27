@@ -9,7 +9,11 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-cim = { path = "../crates/cim" }
+cim-rs = { path = ".." }
+# The roundtrip target proves its output is well-formed XML with the checks turned *on*,
+# which is the opposite setting from the one the reader runs with. Same library, different
+# question — and it is the question a tolerant reader cannot answer about its own output.
+quick-xml = "0.41"
 
 [[bin]]
 name = "read_cimxml"
