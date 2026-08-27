@@ -54,7 +54,7 @@ present:
 | **Portability** | The library built for `wasm32-unknown-unknown` — no filesystem, no C dependency — so "usable from WASM" is a build rather than a claim |
 | **Vintage detection** | Both corpora read with the vintage taken from the documents; a mismatch reported as `CIM0021` at the root element, and neither corpus produces one when correctly paired |
 
-220 tests in total. Corpus-backed tests skip cleanly when the standards artifacts are
+221 tests in total. Corpus-backed tests skip cleanly when the standards artifacts are
 absent, so a fresh clone is green.
 
 ## The check that is not ours

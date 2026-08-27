@@ -523,6 +523,39 @@ fn two_file_model() -> Dataset {
     ds
 }
 
+/// The Turtle the documentation shows is the Turtle the crate writes.
+///
+/// A sample is the first thing a reader believes and the last thing anyone re-runs. This one
+/// was invented: it paired a `TopologicalNode`'s identifier from one model with an
+/// `ACLineSegment`'s name from another, and read as plausible output for years.
+#[test]
+fn the_documented_turtle_sample_is_real_output() {
+    let dir = require_corpus!(common::cgmes3_model(
+        "MicroGrid/MicroGid-BaseCase/MicroGrid-BE-MAS"
+    ));
+    let mut ds = Dataset::new(SCHEMA);
+    ds.load_files(common::xml_files(&dir), &ReadOptions::lenient())
+        .unwrap();
+    let eq = SCHEMA.profile_by_keyword("EQ").unwrap();
+    let ttl =
+        cim_rs::rdf::to_string(&ds, &RdfOptions::new(Syntax::Turtle).profiles(eq.mask())).unwrap();
+
+    for line in [
+        "<urn:uuid:17086487-56ba-4979-b8de-064025a6b4da>",
+        "    a cim:ACLineSegment ;",
+        "    cim:ACLineSegment.r \"2.2\"^^xsd:float ;",
+        "    cim:ConductingEquipment.BaseVoltage <urn:uuid:a7f1d8de-d658-428a-821b-3a5ae5965fd1> ;",
+        "    cim:Equipment.aggregate \"false\"^^xsd:boolean ;",
+        "    cim:IdentifiedObject.name \"BE-Line_1\" ;",
+        "    eu:IdentifiedObject.shortName \"BE-L_1\" .",
+    ] {
+        assert!(
+            ttl.contains(line),
+            "the README and site show a line the export does not produce:\n  {line}"
+        );
+    }
+}
+
 #[test]
 fn an_empty_model_still_produces_a_valid_document() {
     let ds = Dataset::new(SCHEMA);

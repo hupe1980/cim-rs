@@ -46,12 +46,13 @@ fn main() -> cim_rs::Result<()> {
 ```
 
 ```turtle
-<urn:uuid:0472a783-c766-11e1-8775-005056c00008>
+<urn:uuid:17086487-56ba-4979-b8de-064025a6b4da>
     a cim:ACLineSegment ;
-    cim:IdentifiedObject.name "BE-Line_1" ;
     cim:ACLineSegment.r "2.2"^^xsd:float ;
+    cim:ConductingEquipment.BaseVoltage <urn:uuid:a7f1d8de-d658-428a-821b-3a5ae5965fd1> ;
     cim:Equipment.aggregate "false"^^xsd:boolean ;
-    cim:ConductingEquipment.BaseVoltage <urn:uuid:5dc9b970-cc86-4a2b-9e1a-0e2c8b0e6e12> .
+    cim:IdentifiedObject.name "BE-Line_1" ;
+    eu:IdentifiedObject.shortName "BE-L_1" .
 ```
 
 Or from a shell:

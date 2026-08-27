@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/hupe1980/cim-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/hupe1980/cim-rs/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-hupe1980.github.io%2Fcim--rs-b8410f)](https://hupe1980.github.io/cim-rs/)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#licensing-and-attribution)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#-licensing-and-attribution)
 
 `cim-rs` reads, navigates, validates and writes CIM grid models in both profile sets
 European transmission system operators use: **CGMES 3.0** (IEC TS 61970-600-1/-2:2021) and
@@ -42,7 +42,7 @@ println!("{} findings", report.len());
 # Ok::<(), cim_rs::Error>(())
 ```
 
-## Install
+## 📦 Install
 
 ```bash
 cargo add cim-rs                       # the library
@@ -63,7 +63,7 @@ Vintages are independent modules: enabling only the one you need keeps compile t
 binary size down. Both can be on at once — identifiers are per-vintage, so they cannot be
 mixed by accident.
 
-## From a shell
+## ⌨️ From a shell
 
 ```bash
 cim info     MicroGrid-BE/                  # files, object counts, profile coverage, findings
@@ -80,7 +80,7 @@ Where a command's result is a document, the document is the whole of standard ou
 everything else goes to stderr, so the redirection above yields a file and not a file with a
 report appended to it.
 
-## Why this exists
+## 💡 Why this exists
 
 The IEC CIM is the semantic model for exchanging power-grid data between EMS, DMS, market
 and planning systems. The mature tooling is Java (PowSyBl), C++ (libcimpp) and Python
@@ -89,7 +89,7 @@ the gap hurts: high-throughput model servers, embedded and edge grid controllers
 browser tooling, and safety-critical pipelines all want a fast, memory-safe,
 dependency-light CIM core.
 
-## What makes it correct
+## ✅ What makes it correct
 
 CGMES has a handful of properties that a plausible-looking implementation gets wrong.
 `cim-rs` is built around all of them, and each is enforced by a test against the published
@@ -140,7 +140,7 @@ conformity models.
 The reasoning behind each rule is in [the documentation][conformance] and in the rustdoc
 next to the code it governs.
 
-## Standard RDF, with the datatypes CIM/XML omits
+## 🌐 Standard RDF, with the datatypes CIM/XML omits
 
 CIM/XML is not RDF/XML: it predates the W3C recommendation, `rdf:parseType="Statements"` is
 not RDF syntax, and `rdf:ID="_x"` denotes `urn:uuid:x` rather than a document fragment. The
@@ -162,12 +162,13 @@ let turtle = cim_rs::rdf::to_string(&grid, &RdfOptions::new(Syntax::Turtle).prof
 ```
 
 ```turtle
-<urn:uuid:0472a783-c766-11e1-8775-005056c00008>
+<urn:uuid:17086487-56ba-4979-b8de-064025a6b4da>
     a cim:ACLineSegment ;
-    cim:IdentifiedObject.name "BE-Line_1" ;
     cim:ACLineSegment.r "2.2"^^xsd:float ;
+    cim:ConductingEquipment.BaseVoltage <urn:uuid:a7f1d8de-d658-428a-821b-3a5ae5965fd1> ;
     cim:Equipment.aggregate "false"^^xsd:boolean ;
-    cim:ConductingEquipment.BaseVoltage <urn:uuid:5dc9b970-cc86-4a2b-9e1a-0e2c8b0e6e12> .
+    cim:IdentifiedObject.name "BE-Line_1" ;
+    eu:IdentifiedObject.shortName "BE-L_1" .
 ```
 
 Exports are **per profile**, because ENTSO-E's shapes are — objects, element classes and the
@@ -177,7 +178,7 @@ more. A profile the model says nothing about gets no graph rather than one made 
 every profile that carries data, in every published CGMES 3.0 conformity model, conforms.
 [More][rdf]
 
-## Difference models
+## 🔄 Difference models
 
 IEC 61970-552's incremental exchange: the statements to retract, then the statements to
 assert. `cim-rs` reads one, applies one, writes one — and **computes** one, which is the
@@ -201,7 +202,7 @@ Applying a computed change set to its base reproduces the target exactly — eve
 present, none left over, class changes included. That is a test against the published
 conformity models rather than a claim. [More][diff]
 
-## Design
+## 🏗️ Design
 
 ```text
 cim_rs
@@ -235,7 +236,7 @@ interface. **Adopting a new CIM vintage is a regeneration, not a rewrite** — a
 profile, and vocabularies that predate the self-describing ontology header, all handled
 without a line of vintage-specific runtime code. [More][concepts]
 
-## Performance
+## ⚡ Performance
 
 ENTSO-E `RealGrid` conformity model — 112 MiB, 188,547 objects, 1.1M values — release build,
 Apple M-series. Documents are read from memory, so the numbers measure parsing.
@@ -253,7 +254,7 @@ Reproduce with `cargo bench -p cim-rs`; the benchmark also measures a synthetic 
 runs without the standards corpus. Absolute figures move by 20% or more with machine load,
 so treat the ratios between rows as the stable part. [More][perf]
 
-## Conformance
+## 📋 Conformance
 
 | Standard | Role |
 |---|---|
@@ -272,10 +273,10 @@ round-trip, difference models in both directions, pinned validation findings, an
 deterministic mutation campaign, and cross-validation against PowSyBl (Java) and rdflib
 (Python) in pinned containers on both vintages. The library also builds for
 `wasm32-unknown-unknown` in CI, so "pure Rust, no C dependencies" is a build rather than a
-claim. 220 tests; corpus-backed tests skip cleanly on a fresh clone.
+claim. 221 tests; corpus-backed tests skip cleanly on a fresh clone.
 [The full record][conformance]
 
-## Development
+## 🛠️ Development
 
 The standards artifacts are **not vendored**; `specs/` is gitignored and fetched, and
 generated sources are committed. Every repository task is a subcommand of one program:
@@ -289,7 +290,7 @@ cargo test --workspace --all-features
 Repository layout, adding a schema vintage, the `specs/` corpus and its licences, the
 interop harnesses and the release process are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Licensing and attribution
+## ⚖️ Licensing and attribution
 
 This crate is licensed **MIT OR Apache-2.0**.
 

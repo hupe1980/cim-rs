@@ -176,6 +176,13 @@ fn headings_slugify_the_way_github_does() {
         "7-single-crate-strategy--features"
     );
     assert_eq!(slug("What is verified today"), "what-is-verified-today");
+    // An emoji is dropped and the space after it is not, so the anchor keeps a leading
+    // hyphen — which a link to such a heading has to spell. The README relies on this.
+    assert_eq!(
+        slug("⚖️ Licensing and attribution"),
+        "-licensing-and-attribution"
+    );
+    assert_eq!(slug("📦 Install"), "-install");
     // A `#` inside a fenced block is not a heading.
     assert_eq!(headings("```\n# not a heading\n```\n## real\n"), ["real"]);
 }
