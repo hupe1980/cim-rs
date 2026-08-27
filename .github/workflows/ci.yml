@@ -21,6 +21,14 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # libxml2 shares nothing with `quick-xml`, which is what makes it the parser that
+      # proves the output. Installed rather than assumed: the runner image does not ship it.
+      # `--version` so a packaging change fails here rather than inside a later script.
+      - name: An XML parser that is not ours
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libxml2-utils
+          xmllint --version
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
@@ -91,6 +99,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # libxml2 shares nothing with `quick-xml`, which is what makes it the parser that
+      # proves the output. Installed rather than assumed: the runner image does not ship it.
+      # `--version` so a packaging change fails here rather than inside a later script.
+      - name: An XML parser that is not ours
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libxml2-utils
+          xmllint --version
       - name: Cache downloaded standards artifacts
         uses: actions/cache@v4
         with:
