@@ -118,7 +118,7 @@ for d in ds.validate().iter() {
 //!   [`rdf`] and run them with a SHACL engine.
 //! * Reading is tolerant by default ([`ReadOptions::lenient`]), because published models
 //!   carry vendor extensions and identifier deviations. Nothing is silently dropped: every
-//!   deviation becomes a [`Diagnostic`] with a stable rule code (`CIM0001`–`CIM0021`) and,
+//!   deviation becomes a [`Diagnostic`] with a stable rule code (`CIM0001`–`CIM0022`) and,
 //!   from parsing, a byte offset that [`line_and_column`] turns into a line. The report
 //!   grows with how broken the input is, so [`ReadOptions::max_diagnostics`] bounds it and
 //!   the reader says when it stopped.
@@ -128,12 +128,16 @@ for d in ds.validate().iter() {
 //!   `urn:uuid:` name in RDF and splits in two against a file that spells the same UUID
 //!   conventionally. The spelling is remembered so re-export reproduces the document; the
 //!   identity does not depend on it. See [`MridForm`].
+//! * Numbers are compared by value and written as they arrived. Published models write
+//!   `2.62637E-05` and `250.000000`, and re-rendering an `f64` returns neither; [`Real`]
+//!   carries the spelling beside the number, so a re-export is the file that was read and
+//!   a difference never reports a reformatting as a change.
 //!
 //! # A command line
 //!
 //! The `cli` feature builds `cim`, a tool over this same API: `cim info`, `validate`,
-//! `export`, `rdf`, `diff` and `schema` over a model set given as files, archives or
-//! directories. `cargo install cim-rs --features cli`.
+//! `export`, `rdf`, `diff`, `apply` and `schema` over a model set given as files, archives
+//! or directories. `cargo install cim-rs --features cli`.
 //!
 //! # Further reading
 //!
@@ -223,9 +227,9 @@ pub use rdf::{RdfOptions, Syntax};
 pub use reader::{ReadOptions, Strictness};
 pub use schema::{AttrId, AttrKind, ClassId, Mult, Primitive, ProfileId, ProfileMask, Schema};
 pub use validate::{ValidateOptions, validate, validate_with};
-pub use value::Value;
+pub use value::{Real, Value};
 pub use view::{TypedRef, TypedView};
-pub use writer::{IdStyle, WriteOptions};
+pub use writer::{HeaderSource, IdStyle, WriteOptions};
 pub use xml::IdentifierForm;
 
 /// The imports most programs need.

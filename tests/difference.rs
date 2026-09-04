@@ -343,7 +343,7 @@ fn a_computed_difference_covers_every_kind_of_change() {
     // `a`: an attribute will change. `b`: the object goes away. `c` is not there yet.
     let mut o = Object::new(classes::ACLineSegment, a.clone());
     o.set(attrs::identified_object::name, Value::Text("L".into()));
-    o.set(attrs::ac_line_segment::r, Value::Float(1.5));
+    o.set(attrs::ac_line_segment::r, Value::from(1.5));
     base.insert(o);
     let mut o = Object::new(classes::Breaker, b.clone());
     o.set(attrs::identified_object::name, Value::Text("BR".into()));
@@ -352,7 +352,7 @@ fn a_computed_difference_covers_every_kind_of_change() {
     let mut target = Dataset::new(SCHEMA);
     let mut o = Object::new(classes::ACLineSegment, a.clone());
     o.set(attrs::identified_object::name, Value::Text("L".into()));
-    o.set(attrs::ac_line_segment::r, Value::Float(2.75));
+    o.set(attrs::ac_line_segment::r, Value::from(2.75));
     target.insert(o);
     let mut o = Object::new(classes::Disconnector, c.clone());
     o.set(attrs::identified_object::name, Value::Text("DS".into()));
@@ -413,7 +413,7 @@ fn a_computed_difference_can_be_restricted_to_one_profile() {
     target
         .get_mut(victim)
         .unwrap()
-        .set_in(ssh.mask(), attr, cim_rs::Value::Float(old + 1.0));
+        .set_in(ssh.mask(), attr, cim_rs::Value::from(old + 1.0));
 
     let in_ssh = base.difference_to(&target, &DiffOptions::default().profiles(ssh.mask()));
     assert!(
@@ -486,4 +486,41 @@ fn a_change_file_without_an_identifier_is_still_re_exported() {
     assert_eq!(again.differences()[0].forward.len(), 1);
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Both limits of the statement syntax are reported, not just the one that was.
+///
+/// A changed compound has always produced a diagnostic. Deletion — the other thing
+/// `rdf:parseType="Statements"` cannot express — was only counted, so a caller who applied
+/// a computed change set and compared content identifiers found an object that was empty
+/// rather than absent, with nothing in the report to say why.
+#[test]
+fn a_difference_says_that_it_cannot_delete_an_object() {
+    let id = Mrid::parse("51515151-5151-4151-8151-515151515151");
+    let mut base = Dataset::new(SCHEMA);
+    let mut going = Object::new(cim_rs::cgmes3::classes::Substation, id.clone());
+    going.set(
+        cim_rs::cgmes3::attributes::identified_object::name,
+        Value::from("gone"),
+    );
+    base.insert(going);
+
+    let target = Dataset::new(SCHEMA);
+    let change = base.difference_to(&target, &Default::default());
+
+    assert_eq!(change.removed, 1);
+    let said: Vec<String> = change.report.iter().map(|d| d.to_string()).collect();
+    assert!(
+        said.iter().any(|s| s.contains("cannot say so")),
+        "the deletion limit went unreported: {said:?}"
+    );
+
+    // And the reason it is worth saying: applying leaves a shell behind.
+    base.apply_difference(&change.model);
+    let left = base.by_mrid(&id).expect("the identifier remains");
+    assert!(left.is_empty(), "the object should have been emptied");
+    assert_ne!(base.content_id(), target.content_id());
+    // Which `prune_empty` is for.
+    base.prune_empty();
+    assert!(base.by_mrid(&id).is_none());
 }

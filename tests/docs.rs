@@ -119,7 +119,7 @@ fn check(path: &Path) {
 /// anything else is checked by nothing but this.
 #[test]
 fn documented_snippets_name_the_library_correctly() {
-    for file in ["README.md", "CONTRIBUTING.md"] {
+    for file in ["README.md", "CONTRIBUTING.md", "CHANGELOG.md"] {
         let Ok(text) = std::fs::read_to_string(root().join(file)) else {
             continue;
         };
@@ -137,6 +137,28 @@ fn documented_snippets_name_the_library_correctly() {
 fn every_internal_anchor_resolves_to_a_heading() {
     check(&root().join("README.md"));
     check(&root().join("CONTRIBUTING.md"));
+    check(&root().join("CHANGELOG.md"));
+}
+
+/// The changelog's newest entry is the version being built.
+///
+/// Bumping the manifest and forgetting the changelog is the one mistake a changelog makes,
+/// and the release workflow — which checks the *tag* against the manifest — would not
+/// notice it. `CARGO_PKG_VERSION` is the manifest, so this compares the two documents that
+/// are supposed to agree.
+#[test]
+fn the_changelog_leads_with_the_version_being_built() {
+    let text = std::fs::read_to_string(root().join("CHANGELOG.md")).expect("CHANGELOG.md");
+    let newest = text
+        .lines()
+        .find_map(|l| l.strip_prefix("## [")?.split(']').next())
+        .expect("a `## [version]` heading");
+    assert_eq!(
+        newest,
+        env!("CARGO_PKG_VERSION"),
+        "the changelog leads with {newest} and the manifest says {}",
+        env!("CARGO_PKG_VERSION")
+    );
 }
 
 /// The rule catalogue on the site lists every rule the crate has.

@@ -138,6 +138,71 @@ pub fn identifier_census(text: &str) -> std::collections::BTreeSet<String> {
     out
 }
 
+/// Every attribute value in a document, exactly as it is written.
+///
+/// The third census, and the one the first two are structurally blind to. `element_census`
+/// counts objects by class and identity style; `identifier_census` compares identifier
+/// text; neither looks at what an object *says*, and the model-level round-trip cannot —
+/// it compares parsed values, so a published `2.62637E-05` re-exported as `0.0000262637`
+/// is equal by construction on both sides of the comparison.
+///
+/// A multiset rather than a sequence: re-export legitimately writes attributes in schema
+/// order rather than in the order the document happened to use, so position is not part of
+/// the claim. The text is.
+///
+/// Property elements only — a value is the text of a `prefix:Class.attribute` element with
+/// no `rdf:resource` and no `parseType`. References are the identifier census's business
+/// and compounds have no text of their own.
+pub fn value_census(text: &str) -> std::collections::BTreeMap<(String, String), usize> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut rest = text;
+    while let Some(lt) = rest.find('<') {
+        let after = &rest[lt + 1..];
+        let Some(close) = after.find('>') else { break };
+        let tag = &after[..close];
+        rest = &after[close + 1..];
+        if tag.starts_with(['/', '?', '!']) || tag.ends_with('/') {
+            continue;
+        }
+        let name = tag.split([' ', '\t', '\n', '\r']).next().unwrap_or("");
+        // `Class.attribute` is a property; anything else is an object or the header.
+        if !name.contains('.') || tag.contains("rdf:resource") || tag.contains("parseType") {
+            continue;
+        }
+        let Some(end) = rest.find('<') else { break };
+        *out.entry((name.to_owned(), rest[..end].to_owned()))
+            .or_default() += 1;
+    }
+    out
+}
+
+/// Describe the first few differences between two value censuses.
+pub fn value_census_diff(
+    before: &std::collections::BTreeMap<(String, String), usize>,
+    after: &std::collections::BTreeMap<(String, String), usize>,
+    limit: usize,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for (key, n) in before {
+        let m = after.get(key).copied().unwrap_or(0);
+        if m != *n {
+            out.push(format!("{} {:?}: {n} -> {m}", key.0, key.1));
+            if out.len() >= limit {
+                return out;
+            }
+        }
+    }
+    for (key, n) in after {
+        if !before.contains_key(key) {
+            out.push(format!("{} {:?}: 0 -> {n} (new)", key.0, key.1));
+            if out.len() >= limit {
+                return out;
+            }
+        }
+    }
+    out
+}
+
 /// Check a document against the XML and XML Namespaces recommendations.
 ///
 /// Returns `Err` with the first violation found.

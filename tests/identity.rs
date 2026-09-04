@@ -11,6 +11,13 @@
 //! Variables and Topology files as `rdf:about`. The round-trip tests could not see it:
 //! they compare the assembled model, and the model is the same either way. These tests
 //! compare the *serialized form* against the published files.
+//!
+//! The same reasoning reaches one level further down, to what an object *says*. Counting
+//! identity styles cannot see a value being rewritten, and neither can the model-level
+//! round-trip, which compares parsed numbers — `2.62637E-05` and `0.0000262637` are the
+//! same `f64` on both sides of that comparison, so the assertion holds while the document
+//! changes. [`value_census`](common::value_census) closes that, and it is what caught the
+//! published corpus being re-exported with 8,623 of its numbers reformatted.
 
 #![cfg(feature = "cgmes3")]
 
@@ -124,6 +131,96 @@ fn re_export_identifies_objects_the_way_the_published_files_do() {
         assert!(checked > 0, "{model}: nothing compared");
         std::fs::remove_dir_all(&out).ok();
     }
+}
+
+/// Re-export reproduces the *text* of every value, not merely its number.
+///
+/// Deliberately whole-model rather than per-file for the numbers themselves: a value
+/// legitimately moves between the files of a set. What must not change is what the model
+/// set says.
+///
+/// Model sets that contradict themselves are excluded by name — not by count, and not by
+/// tolerating a threshold. `MicroGrid-Type3` holds 24 hourly snapshots per directory, so
+/// loading one merges 24 different values for the same single-valued attributes and 23 of
+/// them are discarded by design ([`Dataset::merge_conflicts`]); a document that was never
+/// assembled cannot be reproduced. Asking the dataset whether it contradicts itself is the
+/// exact predicate, where "skip the big ones" would be a guess that quietly grows.
+#[test]
+fn re_export_reproduces_the_text_of_every_value() {
+    let root = require_corpus!(common::cgmes3_models());
+    let mut checked_models = 0usize;
+    let mut checked_values = 0usize;
+    let mut skipped = Vec::new();
+
+    for model in [
+        "MiniGrid/MiniGrid-Merged",
+        "SmallGrid/SmallGrid-Merged",
+        "MicroGrid/MicroGrid-Type1/MicroGrid-Type1-Merged",
+        "FullGrid/FullGrid-Merged",
+        "MicroGrid/MicroGrid-Type3/CGMs",
+        "MicroGrid/MicroGrid-Type3/IGMs",
+    ] {
+        let dir = root.join(model);
+        if !dir.is_dir() {
+            continue;
+        }
+        let ds = Dataset::load_dir(SCHEMA, &dir).unwrap();
+        if !ds.merge_conflicts().is_empty() {
+            skipped.push(model);
+            continue;
+        }
+
+        let out = std::env::temp_dir().join(format!(
+            "cim-values-{}-{}",
+            std::process::id(),
+            model.replace('/', "_")
+        ));
+        std::fs::create_dir_all(&out).unwrap();
+        ds.save_as_loaded(&out).unwrap();
+
+        let mut before = std::collections::BTreeMap::new();
+        let mut after = std::collections::BTreeMap::new();
+        for f in common::xml_files(&dir) {
+            for (k, n) in common::value_census(&std::fs::read_to_string(&f).unwrap()) {
+                *before.entry(k).or_insert(0) += n;
+            }
+        }
+        for f in common::xml_files(&out) {
+            for (k, n) in common::value_census(&std::fs::read_to_string(&f).unwrap()) {
+                *after.entry(k).or_insert(0) += n;
+            }
+        }
+        std::fs::remove_dir_all(&out).ok();
+
+        let diff = common::value_census_diff(&before, &after, 8);
+        assert!(
+            diff.is_empty(),
+            "{model}: {} value texts changed on re-export:\n{}",
+            diff.len(),
+            diff.join("\n")
+        );
+        checked_values += before.values().sum::<usize>();
+        checked_models += 1;
+    }
+
+    assert!(
+        checked_models >= 4,
+        "only {checked_models} model sets compared"
+    );
+    assert!(
+        checked_values > 100_000,
+        "only {checked_values} values compared"
+    );
+    // Pinned, not tolerated: the one model set that legitimately cannot be reproduced is
+    // named, so a second one appearing fails here rather than being absorbed.
+    assert_eq!(
+        skipped,
+        [
+            "MicroGrid/MicroGrid-Type3/CGMs",
+            "MicroGrid/MicroGrid-Type3/IGMs"
+        ],
+        "the set of self-contradicting model sets changed"
+    );
 }
 
 /// A reference written as an absolute IRI denotes the UUID in its fragment.

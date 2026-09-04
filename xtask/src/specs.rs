@@ -86,8 +86,10 @@ const ARTIFACTS: &[Artifact] = &[
     },
     // Public ENTSO-E technical documents.
     Artifact {
-        url: "https://eepublicdownloads.entsoe.eu/clean-documents/CIM_documents/Grid_Model_CIM/RDF-SyntaxUserGuide_v1-0.pdf",
-        dest: "docs/RDF-SyntaxUserGuide_v1-0.pdf",
+        // v1.1.0, which is the revision the documentation cites: a reader following a
+        // citation has to land on the document in `specs/`.
+        url: "https://eepublicdownloads.entsoe.eu/clean-documents/CIM_documents/Grid_Model_CIM/RDF-SyntaxUserGuide_v_1-1-0.pdf",
+        dest: "docs/RDF-SyntaxUserGuide_v1-1-0.pdf",
         kind: Kind::File,
         license: "public ENTSO-E document",
     },

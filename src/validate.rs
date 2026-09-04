@@ -248,6 +248,13 @@ fn check_object(
     // checked rather than only the paths into it.
     if options.class_membership {
         for slot in obj.slots() {
+            // A compound is an object in miniature, so the same question applies to its
+            // fields — and the consequence is worse there. An object's stray value is
+            // dropped by the writer's schema-ordered walk; a compound's fields are written
+            // exactly as held, so a foreign one leaves inside a document that is
+            // well-formed XML and not a conforming CGMES file.
+            check_compound_membership(schema, &slot.value, class.name, mrid, report);
+
             let def = schema.attr(slot.attr);
             if !schema.is_a(obj.class(), def.owner) {
                 report.push(
@@ -425,6 +432,40 @@ fn check_object(
                 }
             }
         }
+    }
+}
+
+/// Report fields a compound's class does not declare, at any nesting depth.
+fn check_compound_membership(
+    schema: &'static Schema,
+    value: &Value,
+    class: &'static str,
+    mrid: &Mrid,
+    report: &mut Report,
+) {
+    let Value::Compound(c) = value else { return };
+    for (attr, v) in c.values() {
+        let def = schema.attr(*attr);
+        if !schema.is_a(c.class(), def.owner) {
+            report.push(
+                Diagnostic::error(
+                    Rule::UnknownAttribute,
+                    format!(
+                        "{} is declared on {} and cannot be stored on a {} compound; it \
+                         would be written into the document anyway, which no consumer of \
+                         that profile will accept",
+                        def.name,
+                        schema.class(def.owner).name,
+                        schema.class(c.class()).name
+                    ),
+                )
+                .with_class(class)
+                .with_object(mrid.clone())
+                .with_attribute(def.name),
+            );
+        }
+        // Compounds nest: a `StreetAddress` holds a `StreetDetail`.
+        check_compound_membership(schema, v, class, mrid, report);
     }
 }
 

@@ -13,7 +13,7 @@ cargo xtask fetch-specs         # ENTSO-E RDFS + SHACL + conformity models -> sp
 cargo xtask codegen             # RDFS -> src/generated/
 cargo xtask codegen --check     # CI gate: committed sources match the vocabularies
 cargo xtask inspect             # summarise every parsed vintage
-cargo xtask shacl               # RDF export vs. ENTSO-E's published shapes (needs pyshacl)
+cargo xtask shacl [--vintage cgmes2]   # RDF export vs. ENTSO-E's published shapes (needs pyshacl)
 cargo xtask crossvalidate       # PowSyBl and rdflib read our output (needs Docker)
 
 cargo test --workspace --all-features
@@ -38,7 +38,7 @@ PYSHACL=.venv/bin/pyshacl cargo xtask shacl
 ./                 the published crate — the repository root *is* the crate
   src/
     schema.rs      static schema metadata: ClassDef, AttrDef, EnumDef, Mult, AttrKind
-    error.rs       Error, Diagnostic, Report, and the CIM0001–CIM0021 rule codes
+    error.rs       Error, Diagnostic, Report, and the CIM0001–CIM0022 rule codes
     mrid.rs        Mrid — UUID identity per 61970-552, lenient about real-world files
     value.rs       Value — the attribute value domain, with tolerant lexical parsing
     object.rs      Object + Slot + Compound — sparse storage with per-value provenance
@@ -98,7 +98,7 @@ cached, pinned refs, SHA-256 `MANIFEST.txt`):
 | `cgmes-2.4.15/` | CGMES 2.4.15 RDFS (2016) + 2020 component refresh | Apache-2.0 (UCAIug/ENTSO-E) |
 | `test-models/cas-2.0/` | MicroGrid, MiniGrid, SmallGrid, RealGrid, FullGrid conformity test configurations | CC BY-SA 4.0 |
 | `test-models/cas-3.0.3/` | CGMES 3.0 conformity assessment test configurations | CC BY-SA 4.0 |
-| `test-models/qocdc-3.2.1/` | ENTSO-E QoCDC quality-gate test models (large, realistic) | CC BY-SA 4.0 |
+| `test-models/qocdc-3.2.1/` | ENTSO-E QoCDC quality-gate models — real TSO exports, conformant and deliberately not; swept by `tests/qocdc.rs` | CC BY-SA 4.0 |
 | `docs/` | Public ENTSO-E PDFs: technical specs, RDF syntax user guide, implementation Q&A | public ENTSO-E docs |
 
 The licensing consequence is load-bearing: CC BY-SA 4.0 test models are a **local and CI
@@ -116,9 +116,25 @@ Robustness is covered two ways: `tests/robustness.rs` runs a deterministic mutat
 (truncation at every byte, single-byte corruption, region deletion) on stable as part of
 `cargo test`, and `fuzz/` holds `cargo-fuzz` targets for longer runs on nightly.
 
+`tests/qocdc.rs` sweeps ENTSO-E's quality-check corpus — 100 model sets of real TSO output,
+conformant and deliberately not — which is the complement of the conformity models: those
+are correct by construction.
+
+Fidelity is covered by three censuses in `tests/common/mod.rs`, each blind to what the next
+one sees: `element_census` counts objects by class and identity style, `identifier_census`
+compares identifier text, and `value_census` compares the text of every value. A model-level
+round trip cannot stand in for any of them — it compares parsed values, so a number
+re-exported in a different notation is equal to itself on both sides of the assertion.
+
 Every Rust example in the README and on the site is compiled as a doctest, so documentation
 whose code stops building fails `cargo test`. `tests/docs.rs` covers what a doctest cannot:
 that every `#`-anchor resolves and that snippets name the library `cim_rs`.
+
+`tests/concepts.rs` will look like it tests nothing. It guards the maintainers' internal
+architecture notes, which live in a gitignored `concepts/` directory and are therefore
+absent from a clone and from CI — so it skips there, and runs on the only machine that can
+break them: contiguous `D`/`R` numbering, no dangling citation or link between the
+documents, and the counts their prose states matching the entries there are.
 
 Examples are four runnable programs, one task each; `build_model` needs no input at all:
 
@@ -128,6 +144,15 @@ cargo run --example inspect     --features cgmes3 -- <model-dir>
 cargo run --example to_rdf      --features cgmes3 -- <model-dir> EQ
 cargo run --example changes     --features cgmes3 -- <base> <target>
 ```
+
+## What runs when
+
+`.github/workflows/ci.yml` is every push: the suite without the corpus, the feature matrix,
+the corpus-backed conformance job, SHACL, cross-validation, `wasm32`, MSRV, a short fuzz run
+and `cargo-deny`. `scheduled.yml` is weekly — all four QoCDC archives instead of the two the
+per-push sweep can afford, and fifteen minutes per fuzz target instead of sixty seconds.
+Neither bound in CI is a claim about what is worth checking; both are about what belongs in
+a two-minute build.
 
 ## The site
 
@@ -141,6 +166,10 @@ cd site && zola check      # every internal and external link
 
 ## Releasing
 
+`CHANGELOG.md` leads with the version in the manifest — `tests/docs.rs` checks that, since
+the release workflow compares the tag against the manifest and would not notice a changelog
+left behind.
+
 A tag `v<version>` is the whole trigger. The workflow's shape follows from one fact:
 **publishing to crates.io cannot be undone** — a version can be yanked but never reused — so
 everything that can say no runs before anything irreversible.
@@ -153,24 +182,3 @@ a SHA-256 beside it. Only then does the publish happen.
 
 `workflow_dispatch` runs everything except the two publish steps, so the release path can be
 exercised without spending a version number to find out whether it works.
-
-## What's next
-
-**Before a 0.x release** — `cargo-semver-checks` once a published baseline exists, and a
-feedback loop with the LF Energy / SOGNO community (possible cimgen upstreaming, OpenCGMES
-as a counterpart on the JVM side).
-
-**More profiles, when someone wants them.** ENTSO-E's NC/RCP extension profiles are published
-today in the same RDFS form the generator already reads, and `ProfileMask` is 64 bits so that
-twenty-nine published profiles still leave room for a private one. Adding a profile set is a
-`vintage.rs` entry and a regeneration, not a design change — which is equally true of the
-IEC 62325 market profiles the guide lists as out of scope.
-
-**New schema vintages, when they land** — CIM18 on publication, IEC 61970-501 Ed.2 as an RDFS
-input once it stops being a draft, CIM JSON-LD if UCAIug settles it.
-
-**Bindings for other languages are deliberately absent from this list.** The library is
-`wasm32`-clean and has one mandatory dependency precisely so a binding *can* be built, and CI
-proves the first half of that on every push. Shipping and maintaining a Python wheel or an npm
-package is a separate product with its own release pipeline and its own incumbents, not a
-feature of this crate.

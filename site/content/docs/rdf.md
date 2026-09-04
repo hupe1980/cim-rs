@@ -111,6 +111,33 @@ nothing but headers looks like an export and validates like one.
 
 Use `--merged` when the whole model in one graph is what you want, as in a triple store.
 
+### A file that serves several profiles is one graph
+
+"Per profile" is shorthand for "per instance file", and the two differ in CGMES 2.4.15,
+where Equipment, Operation and ShortCircuit travel together and ENTSO-E publishes a single
+`EquipmentProfile` shape for the lot. Asking for them together writes the graph that file
+would contain:
+
+```bash
+cim rdf model/ --profile EQ --profile OP --profile SC --out graphs/   # graphs/EQ_OP_SC.ttl
+```
+
+From the library it is a mask, which is the same thing `write_profiles` takes:
+
+```rust,no_run
+# use cim_rs::prelude::*;
+# use cim_rs::cgmes3::SCHEMA;
+# use cim_rs::rdf::{RdfOptions, Syntax};
+# fn main() -> cim_rs::Result<()> {
+# let grid = Dataset::load(SCHEMA, ["EQ.xml"])?;
+let mask = ["EQ", "OP", "SC"]
+    .iter()
+    .filter_map(|k| SCHEMA.profile_by_keyword(k))
+    .fold(0, |acc, p| acc | p.mask());
+let turtle = cim_rs::rdf::to_string(&grid, &RdfOptions::new(Syntax::Turtle).profiles(mask))?;
+# Ok(()) }
+```
+
 ## Checked by an engine, not by assertion
 
 `cargo xtask shacl` exports each profile through `cim rdf` and hands it to

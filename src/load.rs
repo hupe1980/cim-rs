@@ -13,7 +13,7 @@ use crate::error::{Diagnostic, Report, Result, Rule};
 use crate::header::{DifferenceModel, ModelHeader, ModelKind, Statement, StatementValue};
 use crate::mrid::Mrid;
 use crate::object::Object;
-use crate::reader::{ReadOptions, read_header, read_into};
+use crate::reader::{ReadOptions, Strictness, read_header, read_into};
 use crate::schema::{AttrKind, Primitive, ProfileId, Schema};
 use crate::value::Value;
 use crate::writer::{WriteOptions, write_profile};
@@ -24,6 +24,11 @@ pub struct LoadReport {
     pub report: Report,
     /// Files loaded, in order, with the header each carried.
     pub files: Vec<(PathBuf, Option<ModelHeader>)>,
+    /// Files that could not be read, each also reported as `CIM0022`.
+    ///
+    /// Non-empty means the model is missing whatever they held: it is assembled from what
+    /// could be read, which is the useful answer, but it is not the model the caller named.
+    pub failed: Vec<PathBuf>,
     pub objects_read: usize,
 }
 
@@ -57,10 +62,31 @@ impl Dataset {
         let mut out = LoadReport::default();
         for path in paths {
             let path = path.as_ref();
-            let one = self.load_file(path, options)?;
-            out.report.extend(one.report);
-            out.files.extend(one.files);
-            out.objects_read += one.objects_read;
+            // A model set is several files and one of them being unreadable says nothing
+            // about the rest. ENTSO-E's own quality-check corpus contains exactly that
+            // case — a six-file set whose Equipment archive holds the text `nonxmlfile` —
+            // and aborting the load answered it with a single message that did not even
+            // name the file, while the other five were never looked at. Reading is
+            // tolerant by default and this is the same rule one level up: record it, name
+            // it, carry on. `Strictness::Strict` still refuses.
+            match self.load_file(path, options) {
+                Ok(one) => {
+                    out.report.extend(one.report);
+                    out.files.extend(one.files);
+                    out.objects_read += one.objects_read;
+                }
+                Err(e) if options.strictness == Strictness::Lenient => {
+                    out.failed.push(path.to_path_buf());
+                    out.report.push(
+                        Diagnostic::error(Rule::UnreadableFile, e.to_string()).with_source(
+                            path.file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| path.display().to_string()),
+                        ),
+                    );
+                }
+                Err(e) => return Err(e),
+            }
         }
         self.shrink_to_fit();
         Ok(out)
@@ -98,6 +124,7 @@ impl Dataset {
             report: outcome.report,
             objects_read: outcome.objects_read,
             files: vec![(path.to_path_buf(), outcome.header.clone())],
+            failed: Vec::new(),
         };
         // The reader registers the header itself, so that each object records the file it
         // came from while it is being read.
@@ -148,11 +175,9 @@ impl Dataset {
     pub fn open(path: impl AsRef<Path>) -> Result<Dataset> {
         let path = path.as_ref();
         let files = instance_files(path);
-        let schema = files.iter().find_map(|f| detect_file(f)).ok_or_else(|| {
-            crate::error::Error::UnknownVintage {
-                path: path.display().to_string(),
-                known: crate::VINTAGES.iter().map(|s| s.vintage).collect(),
-            }
+        let schema = detect_vintage(&files).ok_or_else(|| crate::error::Error::UnknownVintage {
+            path: path.display().to_string(),
+            known: crate::VINTAGES.iter().map(|s| s.vintage).collect(),
         })?;
         let mut ds = Dataset::new(schema);
         ds.load_files(&files, &ReadOptions::lenient())?;
@@ -187,12 +212,12 @@ impl Dataset {
     /// Statements naming objects or properties the schema does not know are reported and
     /// skipped rather than aborting the whole application.
     pub fn apply_difference(&mut self, diff: &DifferenceModel) -> Report {
+        let schema = self.schema();
         let mut report = Report::default();
         // Values a difference asserts belong to the profiles its own header declares,
         // exactly as if they had arrived in an instance file. Without that, an export
         // would fall back to the attribute's declaration and could file the change under
         // a profile the change set never claimed.
-        let schema = self.schema();
         let profiles = diff
             .header
             .profiles
@@ -459,17 +484,18 @@ impl Dataset {
         profile: ProfileId,
         header: Option<ModelHeader>,
     ) -> Result<()> {
-        let schema = self.schema();
         // `IdStyle::Auto` decides per class whether this profile defines the object or
         // only adds to it, which is what IEC 61970-552 means by rdf:ID versus rdf:about.
-        let options = WriteOptions::default();
-        let header = header.or_else(|| Some(default_header(schema, profile, &self.content_id())));
+        // A caller's header wins; without one the writer derives a conforming one.
+        let options = match header {
+            Some(h) => WriteOptions::default().with_header(h),
+            None => WriteOptions::default(),
+        };
         let file = File::create(path)?;
         write_profile(
             self,
             profile,
             BufWriter::with_capacity(1 << 16, file),
-            header,
             &options,
         )
     }
@@ -481,12 +507,17 @@ impl Dataset {
     pub fn save_all_profiles(&self, dir: &Path, stem: &str) -> Result<Vec<PathBuf>> {
         std::fs::create_dir_all(dir)?;
         let mut written = Vec::new();
+        // Once for the export, not once per profile: deriving a header needs the model's
+        // content identifier, and computing that walks the whole model.
+        let content = self.content_id();
         for cov in crate::validate::profile_coverage(self) {
             if cov.objects == 0 {
                 continue;
             }
             let path = dir.join(format!("{stem}_{}.xml", cov.keyword));
-            self.save_profile(&path, cov.profile, None)?;
+            let header =
+                crate::writer::derive_header_with(self.schema(), cov.profile.mask(), &content);
+            self.save_profile(&path, cov.profile, Some(header))?;
             written.push(path);
         }
         Ok(written)
@@ -506,8 +537,11 @@ impl Dataset {
     /// programmatically belong to no file and go with the first header whose profiles can
     /// carry them, rather than being dropped.
     ///
-    /// Returns the paths written. Headers without a resolvable profile are skipped and
-    /// named in the returned report.
+    /// Returns the paths written. A header without a resolvable profile is skipped and
+    /// named in the report, and the objects that came only from it are counted in
+    /// [`SaveReport::unwritten`] — this is a faithful reproduction of a file set, so where
+    /// there is no file to reproduce, nothing is invented. [`Dataset::save_all_profiles`]
+    /// is the export that always writes something.
     pub fn save_as_loaded(&self, dir: &Path) -> Result<SaveReport> {
         std::fs::create_dir_all(dir)?;
         let schema = self.schema();
@@ -522,6 +556,17 @@ impl Dataset {
             .collect();
         let mut unsourced_placed = false;
         let mut used_names: Vec<String> = Vec::new();
+        // Which objects reached a file. A header this schema cannot resolve a profile for
+        // writes nothing, and its objects would otherwise leave in silence — the failure
+        // this counts is a whole model exporting as an empty directory and a success.
+        let mut covered = vec![false; self.len()];
+        let mark = |ids: &[crate::dataset::ObjectId], covered: &mut Vec<bool>| {
+            for id in ids {
+                if let Some(slot) = covered.get_mut(id.index()) {
+                    *slot = true;
+                }
+            }
+        };
 
         for (i, header) in self.headers().iter().enumerate() {
             let profiles = header
@@ -558,7 +603,7 @@ impl Dataset {
             let sink = BufWriter::with_capacity(1 << 16, file);
             let options = WriteOptions {
                 profiles,
-                header: Some(header.clone()),
+                header: crate::writer::HeaderSource::Given(Box::new(header.clone())),
                 ..Default::default()
             };
 
@@ -604,11 +649,35 @@ impl Dataset {
                 unsourced_placed = ids.len() > before;
             }
 
+            mark(&ids, &mut covered);
             crate::writer::write_objects(self, ids.into_iter(), sink, &options)?;
             out.written.push(path);
         }
+
+        out.unwritten = self
+            .iter()
+            .filter(|(id, _)| !covered.get(id.index()).copied().unwrap_or(false))
+            .count();
         Ok(out)
     }
+}
+
+/// The schema vintage a set of inputs declares, taken from the first file that answers.
+///
+/// The first file is not necessarily the one that can be read: ENTSO-E's quality-check
+/// corpus has a six-file set whose *Equipment* archive is deliberately not XML, and taking
+/// only the first answer there means reading five CGMES 2.4.15 files as CGMES 3.0 — 211
+/// unknown-class warnings and an empty model, which is what `CIM0021` exists to prevent.
+///
+/// One function rather than one per caller, because [`Dataset::open`] walked the whole list
+/// and the `cim` tool looked at exactly one, and the difference was invisible until a file
+/// that could not be read happened to come first.
+pub fn detect_vintage<I, P>(paths: I) -> Option<&'static Schema>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    paths.into_iter().find_map(|p| detect_file(p.as_ref()))
 }
 
 /// The schema vintage a file declares, or `None` if it cannot be read or is unrecognised.
@@ -645,7 +714,8 @@ pub fn detect_file(path: &Path) -> Option<&'static Schema> {
 /// quite obvious: models arrive as directories, the directories nest, and the order files
 /// are read in has to be fixed for a load to be reproducible even though merging makes it
 /// otherwise immaterial.
-pub fn instance_files(path: &Path) -> Vec<PathBuf> {
+pub fn instance_files(path: impl AsRef<Path>) -> Vec<PathBuf> {
+    let path = path.as_ref();
     fn looks_like_input(path: &Path) -> bool {
         let Some(ext) = path.extension() else {
             return false;
@@ -683,6 +753,14 @@ pub struct SaveReport {
     pub written: Vec<PathBuf>,
     /// Headers that declared no profile this schema recognises.
     pub skipped: Vec<String>,
+    /// Objects no output file covers.
+    ///
+    /// Non-zero means the export is not the model: an object belongs to a file whose
+    /// header declares no profile — a document with no `md:FullModel` at all, for
+    /// instance — and there is nothing to reproduce it into. Reported as a number rather
+    /// than left to be inferred from an empty `written`, because a *partly* exported model
+    /// is the case that looks like success.
+    pub unwritten: usize,
 }
 
 /// The file name to write a header's model back to, confined to the output directory.
@@ -719,33 +797,6 @@ fn unique_name(name: String, used: &mut Vec<String>) -> String {
     }
     used.push(candidate.clone());
     candidate
-}
-
-/// A minimal conforming header for a profile export.
-///
-/// `content` is the exporting dataset's [`Dataset::content_id`]. The model identifier is
-/// derived from it and from the profile, rather than left empty: IEC 61970-552 requires
-/// `md:FullModel rdf:about`, so a header without one — or with the nil UUID — is a document
-/// this crate's own validator rejects. Deriving it keeps the export deterministic while
-/// still giving two different models different identifiers.
-///
-/// `md:Model.created` and `md:Model.scenarioTime` are deliberately absent: both are facts
-/// about the exchange that only the caller knows, and inventing a timestamp would make an
-/// unchanged model export differently every time. [`validate`](mod@crate::validate)
-/// reports them as warnings, which is the right nudge.
-fn default_header(schema: &Schema, profile: ProfileId, content: &Mrid) -> ModelHeader {
-    let def = schema.profile(profile);
-    let name = format!(
-        "{}\u{1e}{}\u{1e}{}",
-        schema.vintage, def.version_iri, content
-    );
-    ModelHeader {
-        kind: ModelKind::Full,
-        id: Some(Mrid::new_v5(&Dataset::DERIVED_NS, name.as_bytes())),
-        profiles: vec![def.version_iri.to_owned()],
-        version: Some("1".to_owned()),
-        ..Default::default()
-    }
 }
 
 /// Write a dataset to any sink, as a single document.
@@ -803,9 +854,8 @@ impl Dataset {
 
         let file = File::create(path)?;
         let mut zw = zip::ZipWriter::new(BufWriter::new(file));
-        let schema = self.schema();
         let mut written = Vec::new();
-        // Once for the archive, not once per profile: it walks the whole model.
+        // Once for the archive, not once per profile: see `save_all_profiles`.
         let content = self.content_id();
 
         for cov in crate::validate::profile_coverage(self) {
@@ -815,13 +865,13 @@ impl Dataset {
             let name = format!("{stem}_{}.xml", cov.keyword);
             zw.start_file(&name, SimpleFileOptions::default())
                 .map_err(|e| Error::Zip(e.to_string()))?;
-            let options = WriteOptions::default();
+            let header =
+                crate::writer::derive_header_with(self.schema(), cov.profile.mask(), &content);
             write_profile(
                 self,
                 cov.profile,
                 &mut zw,
-                Some(default_header(schema, cov.profile, &content)),
-                &options,
+                &WriteOptions::default().with_header(header),
             )?;
             written.push(name);
         }

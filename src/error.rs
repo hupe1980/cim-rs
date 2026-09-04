@@ -137,53 +137,79 @@ impl fmt::Display for Severity {
 ///
 /// Rule codes let a pipeline filter, suppress or fail on specific classes of problem
 /// without matching message text.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub enum Rule {
+///
+/// The variants, their codes and [`Rule::ALL`] are one list rather than three. They used
+/// to be three, and the third was hand-maintained: a rule added to the enum and given a
+/// code was simply missing from the catalogue tooling enumerates, and the only test on it
+/// checked that the codes it *did* contain were distinct. One declaration cannot drift
+/// from itself.
+macro_rules! rules {
+    ($($(#[$doc:meta])* $name:ident => $code:literal,)*) => {
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+        pub enum Rule {
+            $($(#[$doc])* $name,)*
+        }
+
+        impl Rule {
+            /// Short stable code, e.g. `CIM0007`, suitable for CI filters.
+            pub const fn code(self) -> &'static str {
+                match self {
+                    $(Rule::$name => $code,)*
+                }
+            }
+
+            /// Every rule, so tooling can enumerate the catalogue.
+            pub const ALL: &'static [Rule] = &[$(Rule::$name,)*];
+        }
+    };
+}
+
+rules! {
     /// An element names a class the schema does not define.
-    UnknownClass,
+    UnknownClass => "CIM0001",
     /// An element names an attribute the schema does not define for its class.
-    UnknownAttribute,
+    UnknownAttribute => "CIM0002",
     /// An attribute value could not be parsed as its declared type.
-    InvalidValue,
+    InvalidValue => "CIM0003",
     /// An identifier is not a UUID, as IEC 61970-552 requires.
-    NonConformingMrid,
+    NonConformingMrid => "CIM0004",
     /// Two objects share an mRID.
-    DuplicateMrid,
+    DuplicateMrid => "CIM0005",
     /// A reference points at an object not present in the dataset.
-    DanglingReference,
+    DanglingReference => "CIM0006",
     /// A required attribute is missing.
-    MissingRequired,
+    MissingRequired => "CIM0007",
     /// An attribute occurs more often than its multiplicity permits.
-    CardinalityExceeded,
+    CardinalityExceeded => "CIM0008",
     /// A reference points at an object of the wrong class.
-    WrongReferenceTarget,
+    WrongReferenceTarget => "CIM0009",
     /// An attribute is used outside the profiles that declare it.
-    AttributeNotInProfile,
+    AttributeNotInProfile => "CIM0010",
     /// An abstract class was instantiated.
-    AbstractInstantiated,
+    AbstractInstantiated => "CIM0011",
     /// A deprecated element is in use.
-    Deprecated,
+    Deprecated => "CIM0012",
     /// The file header is missing or incomplete.
-    MalformedHeader,
+    MalformedHeader => "CIM0013",
     /// A header declares a dependency that was not loaded.
-    UnsatisfiedDependency,
+    UnsatisfiedDependency => "CIM0014",
     /// A structural problem in the document that did not prevent reading.
-    Structure,
+    Structure => "CIM0015",
     /// A stored value does not have the shape its attribute declares.
     ///
     /// CIM/XML carries no datatype information — IEC 61970-552 leaves it to the RDFS —
     /// so a value read as text from an element the schema types as a float, or an
     /// enumeration literal belonging to a different enumeration, is only detectable
     /// against the schema.
-    DatatypeMismatch,
+    DatatypeMismatch => "CIM0016",
     /// An attribute the schema pins with `cims:isFixed` carries a different value.
-    FixedValueMismatch,
+    FixedValueMismatch => "CIM0017",
     /// Two loaded files gave different values for one single-valued attribute.
     ///
     /// Merging by mRID assembles a model from files that each describe part of it. Where
     /// two of them disagree, one value has to be discarded — so the disagreement is
     /// reported rather than resolved silently.
-    ConflictingValue,
+    ConflictingValue => "CIM0018",
     /// A value holds a character XML 1.0 cannot represent.
     ///
     /// Not a matter of escaping: XML's `Char` production excludes most of the C0 range,
@@ -193,13 +219,21 @@ pub enum Rule {
     /// production, so nothing else catches one arriving from a mis-encoded or corrupted
     /// source file. The reader strips the character and reports it; this rule also fires
     /// for a value put in through the public API.
-    IllegalXmlCharacter,
+    IllegalXmlCharacter => "CIM0019",
+    /// A file in the model set could not be read at all.
+    ///
+    /// A model set is several files, and one of them being unreadable — not XML, truncated
+    /// mid-entity, an archive that will not open — says nothing about the others. Under
+    /// [`Strictness::Lenient`](crate::reader::Strictness::Lenient) the load records this
+    /// and carries on, so a report covers the whole set and names the file that failed;
+    /// under `Strict` the same condition is an [`Error`].
+    UnreadableFile => "CIM0022",
     /// The document is written against a different schema vintage than the one reading it.
     ///
     /// CIM/XML declares its vocabulary — `…/CIM100#` for CGMES 3.0, `…/CIM-schema-cim16#`
     /// for 2.4.15 — so this is knowable from the root element. Without it a vintage mismatch
     /// surfaces only as one `CIM0001` per element and a model with nothing in it.
-    WrongVintage,
+    WrongVintage => "CIM0021",
     /// An identifier has no valid RDF/XML serialization.
     ///
     /// `rdf:ID` is an XML `NCName` and `rdf:about` is an IRI reference. Every UUID
@@ -208,61 +242,7 @@ pub enum Rule {
     /// because losing the object would be worse, but the document is not valid RDF/XML and
     /// a general RDF toolchain will refuse it. Well-formedness checking cannot see this:
     /// the document *is* well-formed XML.
-    UnserializableIdentifier,
-}
-
-impl Rule {
-    /// Short stable code, e.g. `CIM0007`, suitable for CI filters.
-    pub const fn code(self) -> &'static str {
-        match self {
-            Rule::UnknownClass => "CIM0001",
-            Rule::UnknownAttribute => "CIM0002",
-            Rule::InvalidValue => "CIM0003",
-            Rule::NonConformingMrid => "CIM0004",
-            Rule::DuplicateMrid => "CIM0005",
-            Rule::DanglingReference => "CIM0006",
-            Rule::MissingRequired => "CIM0007",
-            Rule::CardinalityExceeded => "CIM0008",
-            Rule::WrongReferenceTarget => "CIM0009",
-            Rule::AttributeNotInProfile => "CIM0010",
-            Rule::AbstractInstantiated => "CIM0011",
-            Rule::Deprecated => "CIM0012",
-            Rule::MalformedHeader => "CIM0013",
-            Rule::UnsatisfiedDependency => "CIM0014",
-            Rule::Structure => "CIM0015",
-            Rule::DatatypeMismatch => "CIM0016",
-            Rule::FixedValueMismatch => "CIM0017",
-            Rule::ConflictingValue => "CIM0018",
-            Rule::IllegalXmlCharacter => "CIM0019",
-            Rule::UnserializableIdentifier => "CIM0020",
-            Rule::WrongVintage => "CIM0021",
-        }
-    }
-
-    /// Every rule, so tooling can enumerate the catalogue.
-    pub const ALL: &'static [Rule] = &[
-        Rule::UnknownClass,
-        Rule::UnknownAttribute,
-        Rule::InvalidValue,
-        Rule::NonConformingMrid,
-        Rule::DuplicateMrid,
-        Rule::DanglingReference,
-        Rule::MissingRequired,
-        Rule::CardinalityExceeded,
-        Rule::WrongReferenceTarget,
-        Rule::AttributeNotInProfile,
-        Rule::AbstractInstantiated,
-        Rule::Deprecated,
-        Rule::MalformedHeader,
-        Rule::UnsatisfiedDependency,
-        Rule::Structure,
-        Rule::DatatypeMismatch,
-        Rule::FixedValueMismatch,
-        Rule::ConflictingValue,
-        Rule::IllegalXmlCharacter,
-        Rule::UnserializableIdentifier,
-        Rule::WrongVintage,
-    ];
+    UnserializableIdentifier => "CIM0020",
 }
 
 impl fmt::Display for Rule {
@@ -472,6 +452,15 @@ mod tests {
         let n = codes.len();
         codes.dedup();
         assert_eq!(codes.len(), n, "duplicate rule codes");
+
+        // Contiguous from CIM0001, because the codes are a published catalogue and a hole
+        // in it means a rule was removed and every citation after it now means something
+        // else — the same reasoning the `concepts/` registers are held to.
+        let expected: Vec<String> = (1..=n).map(|i| format!("CIM{i:04}")).collect();
+        assert_eq!(
+            codes, expected,
+            "the rule codes are not contiguous from CIM0001"
+        );
     }
 
     #[test]

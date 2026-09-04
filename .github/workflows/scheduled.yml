@@ -1,0 +1,62 @@
+# The checks that are worth running but not worth running on every push.
+#
+# Both are roadmap items rather than new ideas: the QoCDC sweep in `cargo test` covers TC1
+# and TC2 because the other two archives are 113 MiB and 463 MiB, and the fuzz targets get
+# 60 seconds each per push because that is what a push can afford. Neither bound is a
+# statement about what is worth checking — only about what belongs in a two-minute build.
+name: Scheduled
+
+on:
+  schedule:
+    # Sundays, early. Nothing here gates a merge, so the time of day is only about not
+    # competing with the working week for runners.
+    - cron: "17 4 * * 0"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # Every QoCDC test case, including the two large archives: real TSO exports, each with
+  # variants ENTSO-E broke on purpose. The quick run pins *which* files are broken; this one
+  # asserts only that they are still named, because the larger archives bring their own.
+  qocdc:
+    name: the whole quality-check corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache downloaded standards artifacts
+        uses: actions/cache@v4
+        with:
+          path: specs
+          key: specs-${{ hashFiles('xtask/src/specs.rs') }}
+      - name: Fetch standards artifacts
+        run: cargo xtask fetch-specs
+      - name: Sweep TC1 through TC4
+        run: cargo test --release --test qocdc --all-features
+        env:
+          CIM_QOCDC_ALL: "1"
+
+  # Longer than the 60 seconds a push gets. The deterministic mutation campaign in
+  # `tests/robustness.rs` covers the same contract on stable every time; this is the half
+  # that finds what a minute does not.
+  fuzz:
+    name: fuzz targets, at length
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - run: cargo fuzz run read_cimxml -- -max_total_time=900
+      - run: cargo fuzz run roundtrip -- -max_total_time=900
+      - name: Keep whatever it found
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/

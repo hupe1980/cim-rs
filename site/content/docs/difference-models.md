@@ -85,7 +85,9 @@ papered over.
 
 **An object cannot be deleted, only emptied.** There is no statement meaning "this identifier
 no longer denotes anything". Retracting everything an object said is the whole of what the
-syntax can express, and the identifier is left behind with nothing attached.
+syntax can express, and the identifier is left behind with nothing attached. A computed
+difference reports how many objects it could not delete, so an applied change set that does
+not reproduce the target explains itself.
 
 `Dataset::prune_empty` removes such shells, and is deliberately *not* wired into
 `apply_difference`: a model legitimately contains objects described entirely by files that
@@ -107,7 +109,17 @@ the object as the class it used to be.
 ```bash
 cim diff before/ after/ > change_DIFF.xml
 cim diff before/ after/ --profile SSH --out ssh_DIFF.xml
+
+# …and the receiving half: apply one to the model it was computed against.
+cim apply before/ --change change_DIFF.xml --out updated/
 ```
+
+`apply` names its change sets with `--change` rather than finding them among the inputs,
+because "this file is part of my model" and "this file is a change to it" is a distinction
+only the caller can make — and getting it wrong writes the change set back out as though it
+were data. Several are applied in the order given, and objects the change leaves empty are
+pruned, since retracting everything an object said is as close to deleting it as the
+statement syntax gets.
 
 The summary goes to stderr and the document to stdout, so redirecting gives you the change
 file and still shows you what changed.

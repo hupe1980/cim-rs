@@ -496,6 +496,20 @@ fn a_2_4_15_model_re_exports_as_the_files_it_came_from() {
             common::census_diff(&before, &after)
         );
 
+        // And what the objects *say*, text for text. This vintage exports numbers in forms
+        // a formatter would not choose either, so it is the second place the value census
+        // earns its keep.
+        let values_before = common::value_census(&source);
+        let values_after = common::value_census(&output);
+        let drift = common::value_census_diff(&values_before, &values_after, 8);
+        assert!(
+            drift.is_empty(),
+            "{}: {} value texts changed:\n{}",
+            name.to_string_lossy(),
+            drift.len(),
+            drift.join("\n")
+        );
+
         // And letter for letter. This vintage is where it matters: the boundary set writes
         // identifiers in *mixed* case — `_24C12434-E42B-497f-928F-119C6AE92079` — and an
         // `Mrid` that remembered hyphenation but not case rewrote all 26 of them. The

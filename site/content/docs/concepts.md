@@ -75,6 +75,29 @@ its name in RDF, and it splits in two the moment another file spells the same UU
 conforming way. `Mrid` compares by the sixteen bytes and remembers the spelling, so identity
 holds and re-export writes back what the document had.
 
+## A value's spelling is remembered too
+
+The same reasoning one level down. CIM/XML carries no datatypes, so a value is text, and
+the text of a number is not only its magnitude: published models write `2.62637E-05`,
+`0e+000` and `250.000000`, and ENTSO-E's RDF-Syntax User Guide says the notation carries the
+precision a producer intended.
+
+`Real` therefore keeps the number and the form it was written in, and — exactly like
+`Mrid` — only the number is the value:
+
+```rust
+# use cim_rs::value::Value;
+# use cim_rs::schema::Primitive;
+let read = Value::parse_primitive(Primitive::Float, "0e+000")?;
+assert_eq!(read.as_f64(), Some(0.0));
+assert_eq!(read.to_lexical().as_deref(), Some("0e+000"));
+assert_eq!(read, Value::from(0.0));
+# Ok::<(), cim_rs::value::ParseValueError>(())
+```
+
+So a re-exported file is the file that was read, a difference between two model states never
+reports a reformatting as a change, and a value built in memory renders canonically.
+
 ## `rdf:ID` versus `rdf:about` is not a per-file choice
 
 A Topology file writes `TopologicalNode` with `rdf:ID` — Topology introduces it — and

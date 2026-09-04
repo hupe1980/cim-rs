@@ -422,6 +422,42 @@ fn the_rdf_namespace_is_never_declared_under_a_second_prefix() {
     assert!(text.contains(&format!(r#"xmlns:rdf="{rdf_ns}""#)), "{text}");
 }
 
+/// The obvious call has to produce a document another implementation will take.
+///
+/// IEC 61970-552 gives every instance file an `md:FullModel`, and until this was pinned
+/// the writer emitted none unless the caller built one — while `examples/build_model.rs`,
+/// the example CI runs, said in as many words that "a conforming one is derived". The
+/// derivation existed one layer up in [`Dataset::save_profile`], so both statements were
+/// true of *something* and the example shipped headerless output.
+#[test]
+fn a_document_written_with_default_options_carries_a_derived_header() {
+    let (ds, _) = kitchen_sink();
+    let eq = SCHEMA.profile_by_keyword("EQ").unwrap();
+
+    let mut buf = Vec::new();
+    cim_rs::writer::write_profile(&ds, eq, &mut buf, &WriteOptions::default()).unwrap();
+    let text = String::from_utf8(buf).unwrap();
+    common::assert_well_formed("derived header", &text);
+
+    assert!(text.contains("<md:FullModel"), "no header written:\n{text}");
+    // It names the profile actually written, because that is what a consumer reads to
+    // decide what the file is.
+    assert!(
+        text.contains(SCHEMA.profile(eq).version_iri),
+        "the header does not declare the profile it serves:\n{text}"
+    );
+    // Deterministic and clock-free: the same model exports to the same header twice.
+    let mut again = Vec::new();
+    cim_rs::writer::write_profile(&ds, eq, &mut again, &WriteOptions::default()).unwrap();
+    assert_eq!(text, String::from_utf8(again).unwrap());
+
+    // And it is genuinely optional, rather than merely absent by default.
+    let mut none = Vec::new();
+    cim_rs::writer::write_profile(&ds, eq, &mut none, &WriteOptions::default().headerless())
+        .unwrap();
+    assert!(!String::from_utf8(none).unwrap().contains("FullModel"));
+}
+
 #[test]
 fn a_header_property_with_no_prefix_is_given_one() {
     // A producer that binds its vocabulary as the *default* namespace leaves the property
@@ -469,7 +505,7 @@ fn writing_a_profile_emits_only_that_profile_and_reparses() {
 
     let render = |p| {
         let mut buf = Vec::new();
-        cim_rs::writer::write_profile(&ds, p, &mut buf, None, &WriteOptions::default()).unwrap();
+        cim_rs::writer::write_profile(&ds, p, &mut buf, &WriteOptions::default()).unwrap();
         String::from_utf8(buf).unwrap()
     };
 
@@ -759,7 +795,7 @@ fn conflicting_values_across_profiles_keep_both_files_populated() {
     let render = |kw: &str| {
         let p = SCHEMA.profile_by_keyword(kw).unwrap();
         let mut buf = Vec::new();
-        cim_rs::writer::write_profile(&ds, p, &mut buf, None, &WriteOptions::default()).unwrap();
+        cim_rs::writer::write_profile(&ds, p, &mut buf, &WriteOptions::default()).unwrap();
         String::from_utf8(buf).unwrap()
     };
     for kw in ["EQ", "TP"] {
@@ -1411,5 +1447,91 @@ fn an_identifier_with_no_valid_serialization_is_reported_rather_than_silently_br
             .by_rule(Rule::UnserializableIdentifier)
             .next()
             .is_none()
+    );
+}
+
+/// A document may name itself after its first object, and it is still one file.
+///
+/// IEC 61970-552 puts `md:FullModel` first and every published file does, so the reader
+/// claims a header slot as soon as an object needs one — that is what gives a *headerless*
+/// document's objects a file to be exported back into. The slot has to be filled in rather
+/// than duplicated when the header does arrive, or the same file is described twice and its
+/// objects hang off the placeholder.
+#[test]
+fn a_header_that_follows_its_objects_still_describes_the_file() {
+    let src = r##"<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:cim="http://iec.ch/TC57/CIM100#"
+         xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#"
+         xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <cim:ACLineSegment rdf:ID="_22222222-2222-4222-8222-222222222222">
+    <cim:IdentifiedObject.name>Line</cim:IdentifiedObject.name>
+  </cim:ACLineSegment>
+  <md:FullModel rdf:about="urn:uuid:11111111-1111-4111-8111-111111111111">
+    <md:Model.profile>http://iec.ch/TC57/ns/CIM/CoreEquipment-EU/3.0</md:Model.profile>
+  </md:FullModel>
+</rdf:RDF>"##;
+    let (ds, _) = read(src);
+
+    assert_eq!(ds.headers().len(), 1, "{:?}", ds.headers());
+    let h = &ds.headers()[0];
+    assert!(h.id.is_some(), "the real header was lost: {h:?}");
+    assert_eq!(h.profiles.len(), 1, "{h:?}");
+    // And the object belongs to it, which is what an export writes by.
+    assert_eq!(ds.objects_from(0).count(), 1);
+}
+
+/// A compound is an object in miniature, and its fields are checked like one's.
+///
+/// The reader refuses a field the compound's class does not declare, so this arrives only
+/// through `Compound::set` — the same way an object's stray value does, which is why
+/// `class_membership` checks the finished model rather than the paths into it. The
+/// consequence differs though, and is worse: an object's stray value is dropped by the
+/// writer's schema-ordered walk, while a compound's fields are written exactly as held, so
+/// this one leaves in a document that is well-formed XML and not a conforming CGMES file.
+#[test]
+fn a_compound_field_its_class_does_not_declare_is_reported() {
+    use cim_rs::object::Compound;
+
+    let mut ds = Dataset::new(SCHEMA);
+    let id = Mrid::parse("22222222-2222-4222-8222-222222222222");
+    let mut location = Object::new(cim_rs::cgmes3::classes::Location, id.clone());
+    let mut address = Compound::new(cim_rs::cgmes3::classes::StreetAddress);
+    address.set(
+        cim_rs::cgmes3::attributes::identified_object::name,
+        Value::from("not a street"),
+    );
+    location.set(
+        cim_rs::cgmes3::attributes::location::mainAddress,
+        Value::from(address),
+    );
+    ds.insert(location);
+
+    let found: Vec<String> = ds
+        .validate()
+        .iter()
+        .filter(|d| d.rule == cim_rs::Rule::UnknownAttribute)
+        .map(|d| d.to_string())
+        .collect();
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("StreetAddress compound"), "{found:?}");
+
+    // A field the class *does* declare is not reported, at any depth.
+    let mut ds = Dataset::new(SCHEMA);
+    let mut location = Object::new(cim_rs::cgmes3::classes::Location, id);
+    let mut address = Compound::new(cim_rs::cgmes3::classes::StreetAddress);
+    address.set(
+        cim_rs::cgmes3::attributes::street_address::postalCode,
+        Value::from("1000"),
+    );
+    location.set(
+        cim_rs::cgmes3::attributes::location::mainAddress,
+        Value::from(address),
+    );
+    ds.insert(location);
+    assert!(
+        !ds.validate()
+            .iter()
+            .any(|d| d.rule == cim_rs::Rule::UnknownAttribute),
+        "a conforming compound was reported"
     );
 }

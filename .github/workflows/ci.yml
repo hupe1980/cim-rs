@@ -185,6 +185,13 @@ jobs:
             cargo xtask shacl "$root/$model"
             echo "::endgroup::"
           done
+      # CGMES 2.4.15 runs too, and today it validates nothing: every one of the ten shapes
+      # files ENTSO-E publishes for that vintage carries a property shape with two `sh:path`
+      # values, or a constraint with two `sh:in`, which SHACL forbids and a conforming engine
+      # refuses to load. The set is pinned, so this step is what notices the day one is
+      # fixed — which is the only reason to run a check that currently checks nothing.
+      - name: The older vintage's shapes, and whether they have become loadable
+        run: cargo xtask shacl --vintage cgmes2
 
   # Cross-validation: implementations that are not ours, reading what we write.
   #

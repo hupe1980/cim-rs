@@ -5,7 +5,7 @@ weight = 70
 +++
 
 A library for a file format that cannot be pointed at a file is hard to evaluate. `cim` is
-six subcommands over a model set given as files, archives or directories.
+seven subcommands over a model set given as files, archives or directories.
 
 ```bash
 cargo install cim-rs --features cli
@@ -23,6 +23,7 @@ the public API — so a gap in the tool is a gap in the library.
 | `cim export <input>… --out DIR` | Write the model back as CIM/XML |
 | `cim rdf <input>… --out DIR` | Export as RDF, one graph per profile with data |
 | `cim diff <base> <target>` | Compute a `dm:DifferenceModel` |
+| `cim apply <input>… --change F --out DIR` | Apply a change set and write the result |
 | `cim schema` | What the built-in vintages declare |
 
 An `<input>` is a CIM/XML file, a zip archive, or a directory holding either. Several are
@@ -34,7 +35,9 @@ loaded into **one** model, which is what a CGMES profile set is.
 |---|---|
 | `-o`, `--out PATH` | Where to write — a directory, or a file for `diff` |
 | `--vintage KEY` | Which schema to read against (`cgmes3`, `cgmes2`); by default it is detected from the input |
-| `--profile KEY` | Restrict `rdf` and `diff` to one profile, e.g. `SSH` |
+| `--profile KEY` | Restrict `rdf` and `diff` to a profile, e.g. `SSH`; repeat it for a file that serves several — `--profile EQ --profile OP --profile SC` writes the one graph a CGMES 2.4.15 Equipment file contains |
+| `--change FILE` | A `dm:DifferenceModel` for `apply`; repeat to apply several, in the order given |
+| `--assume-profile KEY` | Which profile a file's values belong to when it declares none — a document with no `md:FullModel` |
 | `--rule CODE` | Show only this rule in `validate`, e.g. `CIM0007` |
 | `--ntriples` | Write N-Triples rather than Turtle |
 | `--merged` | `rdf` writes one graph for the whole model, not one per profile |
@@ -86,6 +89,10 @@ $ cim info MicroGrid-Type1-NL-MAS/
 ```bash
 # Both vintages in one binary. The document says which it is, so this needs no flag.
 cim info CGMES_v2.4.15_MicroGridTestConfiguration_T4_BE_BB_Complete_v2.zip
+
+# Compute a change set, then apply it to the model it was computed against.
+cim diff before/ after/ --out change_DIFF.xml
+cim apply before/ --change change_DIFF.xml --out updated/
 
 # The change set as a document, the summary as commentary.
 cim diff before/ after/ > change_DIFF.xml

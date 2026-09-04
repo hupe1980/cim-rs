@@ -12,8 +12,8 @@ European transmission system operators use: **CGMES 3.0** (IEC TS 61970-600-1/-2
 
 It reads both published ENTSO-E conformity assessment corpora — 31 CGMES 3.0 model sets and
 52 CGMES 2.4.15 archives, **523,842 objects in total** — without a single error, and writes
-every one of them back **file for file, object for object, in the same serialized form** the
-published models use.
+every one of them back **file for file, object for object, value for value** — down to how
+each identifier was spelled and each number was written.
 
 It also exports the model as **ordinary RDF with every value typed from the profile**, so a
 CGMES dataset can be handed to a triple store or validated against ENTSO-E's own SHACL
@@ -71,9 +71,10 @@ cim validate MicroGrid-BE/ --rule CIM0007   # exits 1 on any error
 cim export   MicroGrid-BE/ --out out/       # write the model back as the file set it came from
 cim rdf      MicroGrid-BE/ --out graphs/    # one typed RDF graph per profile with data
 cim diff     before/ after/ > change.xml    # the change set between two model states
+cim apply    before/ --change change.xml --out after/   # and the receiving half
 ```
 
-Six subcommands over a model set given as files, archives or directories, adding no
+Seven subcommands over a model set given as files, archives or directories, adding no
 dependency of its own — see [the command-line reference][cli].
 
 Where a command's result is a document, the document is the whole of standard output and
@@ -112,6 +113,11 @@ conformity models.
 * **`rdf:ID` versus `rdf:about` is a property of the class within the profile**, not of the
   file. The RDFS says which is which; guessing from the profile keyword rewrote 49,255
   identifiers in one published file.
+* **A number's spelling is information.** Published models write `2.62637E-05`, `0e+000`
+  and `250.000000`; storing an `f64` and re-rendering it hands back `0.0000262637`, `0` and
+  `250` — the same model as a different file, which is what the receiver diffs. Each value
+  keeps the form it arrived in, while equality still compares numbers, so a difference never
+  reports a reformatting as a change.
 * **Compounds are values, not references.** `Location.mainAddress` holds a `StreetAddress`
   inline, and those nest. A parser that treats the nested elements as text does not fail —
   it fabricates a value.
@@ -243,12 +249,12 @@ Apple M-series. Documents are read from memory, so the numbers measure parsing.
 
 | | |
 |---|---|
-| Read | **0.33 s** (343 MiB/s, 576k objects/s) |
-| Write, as the file set it came from | **0.34 s** (335 MiB/s) |
-| Write as RDF (N-Triples, 1.3M triples) | **0.55 s** |
-| Validate | **0.04 s** (4.5M objects/s) |
-| Diff against another model state | **0.07 s** (2.6M objects/s) |
-| Inverse index | **0.03 s** |
+| Read | **0.40 s** (282 MiB/s, 474k objects/s) |
+| Write, as the file set it came from | **0.39 s** (288 MiB/s) |
+| Write as RDF (N-Triples, 1.3M triples) | **0.58 s** |
+| Validate | **0.05 s** (4.0M objects/s) |
+| Diff against another model state | **0.08 s** (2.3M objects/s) |
+| Inverse index | **0.04 s** |
 
 Reproduce with `cargo bench -p cim-rs`; the benchmark also measures a synthetic model, so it
 runs without the standards corpus. Absolute figures move by 20% or more with machine load,
@@ -266,15 +272,20 @@ so treat the ratios between rows as the stable part. [More][perf]
 Profiles supported: **EQ, OP, SC, EQBD, SSH, TP, SV, DL, GL, DY** and the header vocabulary
 in both vintages, plus **TPBD** in CGMES 2.4.15.
 
-Checked against the published models on every `cargo test` with the corpus present: reading
-both corpora with zero errors, per-file re-export, well-formedness under a conforming XML
-parser, the RDF export against the N-Triples grammar and ENTSO-E's SHACL shapes, semantic
-round-trip, difference models in both directions, pinned validation findings, and a
-deterministic mutation campaign, and cross-validation against PowSyBl (Java) and rdflib
-(Python) in pinned containers on both vintages. The library also builds for
-`wasm32-unknown-unknown` in CI, so "pure Rust, no C dependencies" is a build rather than a
-claim. 221 tests; corpus-backed tests skip cleanly on a fresh clone.
-[The full record][conformance]
+Checked against the published models on every `cargo test` with the corpus present:
+
+* both conformity corpora read with zero errors, and all 100 of ENTSO-E's QoCDC
+  quality-check model sets — real TSO exports, conformant and deliberately not;
+* per-file re-export compared class for class, identifier for identifier and **value text
+  for value text**;
+* output judged by tools that are not ours: a conforming XML parser, the N-Triples grammar,
+  ENTSO-E's SHACL shapes, and PowSyBl (Java) and rdflib (Python) in pinned containers;
+* semantic round-trip, difference models both ways, pinned validation findings, and a
+  deterministic mutation campaign;
+* a `wasm32-unknown-unknown` build, so "pure Rust, no C dependencies" is a build rather than
+  a claim.
+
+242 tests; corpus-backed tests skip cleanly on a fresh clone. [The full record][conformance]
 
 ## 🛠️ Development
 
@@ -289,6 +300,7 @@ cargo test --workspace --all-features
 
 Repository layout, adding a schema vintage, the `specs/` corpus and its licences, the
 interop harnesses and the release process are in [CONTRIBUTING.md](CONTRIBUTING.md).
+Release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ## ⚖️ Licensing and attribution
 

@@ -194,6 +194,27 @@ impl Dataset {
                 (None, None) => {}
             }
         }
+
+        // The other thing a statement-level difference cannot express. A changed compound
+        // is already reported; deletion was only *counted*, which left the two limits of
+        // the same syntax documented to different standards — and a caller who applies this
+        // change set and compares content identifiers finds an object that is empty rather
+        // than absent, with nothing in the report to explain it.
+        //
+        // One diagnostic rather than one per object: the count is the fact, and a report
+        // that grows with the size of the change is the thing `max_diagnostics` exists to
+        // prevent elsewhere.
+        if out.removed > 0 {
+            out.report.push(Diagnostic::warning(
+                Rule::Structure,
+                format!(
+                    "{} object(s) are absent from the target and a difference model cannot \
+                     say so: applying this retracts everything they said and leaves the \
+                     identifiers behind. Dataset::prune_empty removes such shells",
+                    out.removed
+                ),
+            ));
+        }
         out
     }
 

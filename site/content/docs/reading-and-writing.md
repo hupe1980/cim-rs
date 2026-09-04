@@ -85,6 +85,24 @@ group findings by object or look one up without parsing a message back into data
 the document, so a line number would cost either a second pass or an index proportional to
 the file. `cim_rs::line_and_column(&text, offset)` converts one where a human has to read it.
 
+### One unreadable file is not an unreadable model
+
+A model set is several files, and one of them being unreadable says nothing about the
+others. Under lenient reading a file that cannot be parsed at all — not XML, truncated,
+an archive that will not open — is reported as `CIM0022` **naming the file** and listed in
+`LoadReport::failed`, and the rest of the set is read:
+
+```text
+$ cim validate broken-set/
+  error[CIM0022] 20210125T1900Z_1D_ELIA_EQ_001.zip: not a CIM/XML document: no rdf:RDF root element found
+  warning[CIM0014] 20210125T1900Z_1D_ELIA_SSH_001.xml: model depends on 359ea4dd-… which was not loaded
+  …
+```
+
+The second line is the point: the missing Equipment file explains the dangling references
+below it. `--strict` refuses instead. Vintage detection follows the same rule — it asks each
+input in turn, because the file that cannot be read may be the first one.
+
 ### Zip archives
 
 CGMES model sets are routinely distributed as archives. With the `zip` feature, an archive
@@ -187,6 +205,35 @@ fn how_is_a_terminal_identified_in_ssh() -> cim_rs::writer::IdStyle {
 }
 ```
 
+### Values come back as they were written
+
+Published models write `2.62637E-05`, `0e+000` and `250.000000`; a library that keeps an
+`f64` and re-renders it returns `0.0000262637`, `0` and `250`. The model is identical, the
+file is not, and the file is what a receiving system diffs. ENTSO-E's RDF-Syntax User Guide
+is explicit that the notation carries the producer's precision — from CIM18 active power
+travels as `-90E6`.
+
+So `Real` keeps a number apart from its spelling, as `Mrid` does for a UUID:
+
+```rust
+# use cim_rs::value::Value;
+# use cim_rs::schema::Primitive;
+let read = Value::parse_primitive(Primitive::Float, "250.000000")?;
+
+assert_eq!(read.as_f64(), Some(250.0));                       // the number
+assert_eq!(read.to_lexical().as_deref(), Some("250.000000")); // as the document wrote it
+assert_eq!(read, Value::from(250.0));                         // and equal to the number
+# Ok::<(), cim_rs::value::ParseValueError>(())
+```
+
+Equality compares numbers, so a difference between two model states never reports a
+reformatting as a change, and `Dataset::content_id()` is the same for both.
+
+A spelling is kept only when it is a conforming lexical form for the type the profile
+declares. The reader tolerates `1,5` and `1.5D+3` from files that deviate; writing those
+back would push a defect downstream, so they are repaired to the canonical form. Values set
+programmatically have no spelling and render canonically.
+
 ### Models built in memory
 
 A model built programmatically has no `md:FullModel` identifier, and IEC 61970-552 requires
@@ -195,7 +242,30 @@ one. A random UUID would make every export of an unchanged model a different doc
 actually contains. Export the same model twice and the documents are identical; change one
 value and the identifier changes. No clock, no random source, nothing to configure.
 
+Deriving is the **default**, not something to ask for: `WriteOptions::header` is a
+`HeaderSource`, and a document written without one still gets an `md:FullModel` declaring
+the profiles actually written. Supply your own with `WriteOptions::with_header`, or ask for
+none with `WriteOptions::headerless` — the result is then not a conforming instance file,
+which is why it has to be asked for.
+
 The `build_model` example shows the whole write path with no input files at all.
+
+### When there is no file set to reproduce
+
+`Dataset::save_as_loaded` writes the model back as the files it came from, which needs
+those files to have said what they were. A document with no `md:FullModel` declares no
+profile, so there is nothing to reproduce: its header is skipped, and the objects that came
+only from it are counted in `SaveReport::unwritten`.
+
+A partly exported model is the case that looks like success, which is why the count is a
+number rather than an inference. The `cim` tool acts on it: asked to export a model whose
+files declare no profile, it writes one file per profile and says so on stderr;
+`--assume-profile EQ` names the profile so the file comes back as itself.
+
+```bash
+cim export headerless/ --out out/                      # one file per profile, with a note
+cim export headerless/ --assume-profile EQ --out out/  # the file, as itself
+```
 
 ## Output has to satisfy someone else's parser
 

@@ -1,6 +1,6 @@
 +++
 title = "Validation"
-description = "The structural checks cim-rs derives from the CGMES RDFS vocabulary, the full CIM0001–CIM0020 rule catalogue, and where SHACL takes over."
+description = "The structural checks cim-rs derives from the CGMES RDFS vocabulary, the full CIM0001–CIM0022 rule catalogue, and where SHACL takes over."
 weight = 40
 +++
 
@@ -33,7 +33,8 @@ message text. `cim_rs::Rule::ALL` enumerates them.
 **Raised by** says where a finding comes from, because they arrive in different reports:
 *read* is the `LoadReport` a load returns, *check* is what `validate()` produces. A rule
 marked only *read* will never appear in a validation report — `CIM0021` is about which
-schema you loaded with, which is settled before validation can begin. Applying a difference
+schema you loaded with, and `CIM0022` about a file that never became data, and both are
+settled before validation can begin. Applying a difference
 model raises the *read* rules too.
 
 | Code | Rule | Raised by | Meaning |
@@ -59,6 +60,7 @@ model raises the *read* rules too.
 | `CIM0019` | `IllegalXmlCharacter` | read · check | A value holds a character XML 1.0 cannot represent in any form |
 | `CIM0020` | `UnserializableIdentifier` | check | An identifier has no valid `rdf:ID` or `rdf:about` form |
 | `CIM0021` | `WrongVintage` | read | The document is written against a different CIM vintage than the schema reading it |
+| `CIM0022` | `UnreadableFile` | read | A file in the model set could not be read at all — not XML, truncated, or an archive that will not open |
 
 ## Checks worth explaining
 
@@ -106,6 +108,10 @@ would be dropped without a word on the next export. Three paths can produce one 
 programmatic `set`, a difference statement, a reclassification — and all three are guarded,
 but the finished model is checked anyway, because a defence enforced only at the entrances
 is one refactor from not being enforced at all.
+
+It reaches into compounds, where the consequence is the reverse: a compound's fields are
+written exactly as held rather than filtered through the class, so a foreign one is not
+dropped — it is exported, inside a document no consumer of that profile will accept.
 
 ### `CIM0019` and `CIM0020` are about what the *syntax* can hold
 

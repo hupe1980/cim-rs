@@ -30,35 +30,106 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-const SHACL_DIR: &str = "specs/application-profiles-library/CGMES/CurrentRelease/SHACL/TTL";
-const DEFAULT_MODEL: &str = "specs/test-models/cas-3.0.3/\
-    CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0/MicroGrid/MicroGrid-Type1";
+/// One vintage's shapes: where they live, which graph each constrains, and what to build
+/// the exporter with.
+///
+/// Two vintages rather than one because CGMES 2.4.15 is the profile set in production use
+/// across Europe: SHACL evidence for 3.0 alone covers the vintage most models are *not*
+/// written in.
+struct Vintage {
+    key: &'static str,
+    features: &'static str,
+    shapes_dir: &'static str,
+    header_shapes: &'static str,
+    default_model: &'static str,
+    /// Shapes files a conforming engine refuses to load, and which are therefore not
+    /// evidence of anything. Pinned rather than tolerated.
+    unusable_shapes: &'static [&'static str],
+    /// Shape file, and the profiles whose combined graph it constrains.
+    ///
+    /// A set rather than a keyword, because a shapes file constrains an *instance file*
+    /// and one file serves several profiles: CGMES 2.4.15 exchanges Equipment, Operation
+    /// and ShortCircuit together and publishes one `EquipmentProfile` shape for all three,
+    /// so validating the EQ slice alone would report every Operation attribute as missing.
+    shapes: &'static [(&'static [&'static str], &'static str)],
+}
+
+const VINTAGES: &[Vintage] = &[CGMES3, CGMES2];
 
 /// The "Simple" shape set is the one carrying the `sh:datatype` constraints — 3,137 of
 /// them — which is what makes this a test of the datatype mapping and not only of the
 /// structure.
-const SHAPES: &[(&str, &str)] = &[
-    ("EQ", "61970-600-2_Equipment-AP-Con-Simple-SHACL.ttl"),
-    ("OP", "61970-600-2_Operation-AP-Con-Simple-SHACL.ttl"),
-    ("SC", "61970-600-2_ShortCircuit-AP-Con-Simple-SHACL.ttl"),
-    (
-        "EQBD",
-        "61970-600-2_EquipmentBoundary-AP-Con-Simple-SHACL.ttl",
-    ),
-    (
-        "SSH",
-        "61970-600-2_SteadyStateHypothesis-AP-Con-Simple-SHACL.ttl",
-    ),
-    ("TP", "61970-600-2_Topology-AP-Con-Simple-SHACL.ttl"),
-    ("SV", "61970-600-2_StateVariables-AP-Con-Simple-SHACL.ttl"),
-    ("DL", "61970-600-2_DiagramLayout-AP-Con-Simple-SHACL.ttl"),
-    (
-        "GL",
-        "61970-600-2_GeographicalLocation-AP-Con-Simple-SHACL.ttl",
-    ),
-    ("DY", "61970-600-2_Dynamics-AP-Con-Simple-SHACL.ttl"),
-];
-const HEADER_SHAPES: &str = "61970-552-Header-AP-Con-Simple-SHACL.ttl";
+const CGMES3: Vintage = Vintage {
+    key: "cgmes3",
+    features: "cli,cgmes3",
+    shapes_dir: "specs/application-profiles-library/CGMES/CurrentRelease/SHACL/TTL",
+    header_shapes: "61970-552-Header-AP-Con-Simple-SHACL.ttl",
+    default_model: "specs/test-models/cas-3.0.3/\
+        CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0/MicroGrid/MicroGrid-Type1",
+    unusable_shapes: &[],
+    shapes: &[
+        (&["EQ"], "61970-600-2_Equipment-AP-Con-Simple-SHACL.ttl"),
+        (&["OP"], "61970-600-2_Operation-AP-Con-Simple-SHACL.ttl"),
+        (&["SC"], "61970-600-2_ShortCircuit-AP-Con-Simple-SHACL.ttl"),
+        (
+            &["EQBD"],
+            "61970-600-2_EquipmentBoundary-AP-Con-Simple-SHACL.ttl",
+        ),
+        (
+            &["SSH"],
+            "61970-600-2_SteadyStateHypothesis-AP-Con-Simple-SHACL.ttl",
+        ),
+        (&["TP"], "61970-600-2_Topology-AP-Con-Simple-SHACL.ttl"),
+        (
+            &["SV"],
+            "61970-600-2_StateVariables-AP-Con-Simple-SHACL.ttl",
+        ),
+        (&["DL"], "61970-600-2_DiagramLayout-AP-Con-Simple-SHACL.ttl"),
+        (
+            &["GL"],
+            "61970-600-2_GeographicalLocation-AP-Con-Simple-SHACL.ttl",
+        ),
+        (&["DY"], "61970-600-2_Dynamics-AP-Con-Simple-SHACL.ttl"),
+    ],
+};
+
+/// CGMES 2.4.15's shapes, published as one file per *instance file* rather than per
+/// profile — which is why `EQ` here means the Equipment file, Operation and ShortCircuit
+/// included.
+const CGMES2: Vintage = Vintage {
+    key: "cgmes2",
+    features: "cli,cgmes2",
+    shapes_dir: "specs/application-profiles-library/CGMES/PastReleases/v2-4/Enchanced/SHACL",
+    header_shapes: "FileHeaderProfile.ttl",
+    default_model: "specs/test-models/cas-2.0/MicroGrid/BaseCase_BC/\
+        CGMES_v2.4.15_MicroGridTestConfiguration_BC_Assembled_v2.zip",
+    // Nine of the ten published files carry property shapes with two `sh:path` values,
+    // which SHACL forbids; only Steady State Hypothesis loads. This is ENTSO-E's artifact
+    // rather than our output, and the run says so instead of reporting a pass.
+    unusable_shapes: &[
+        "DiagramLayoutProfile.ttl",
+        "DynamicsProfile.ttl",
+        "EquipmentBoundaryProfile.ttl",
+        "EquipmentProfile.ttl",
+        "FileHeaderProfile.ttl",
+        "GeographicalLocationProfile.ttl",
+        "StateVariablesProfile.ttl",
+        "SteadyStateHypothesisProfile.ttl",
+        "TopologyBoundaryProfile.ttl",
+        "TopologyProfile.ttl",
+    ],
+    shapes: &[
+        (&["EQ", "OP", "SC"], "EquipmentProfile.ttl"),
+        (&["EQBD"], "EquipmentBoundaryProfile.ttl"),
+        (&["TPBD"], "TopologyBoundaryProfile.ttl"),
+        (&["SSH"], "SteadyStateHypothesisProfile.ttl"),
+        (&["TP"], "TopologyProfile.ttl"),
+        (&["SV"], "StateVariablesProfile.ttl"),
+        (&["DL"], "DiagramLayoutProfile.ttl"),
+        (&["GL"], "GeographicalLocationProfile.ttl"),
+        (&["DY"], "DynamicsProfile.ttl"),
+    ],
+};
 
 /// Violations the published conformity models themselves carry.
 ///
@@ -72,8 +143,12 @@ const KNOWN: &[(&str, &str, &str)] = &[(
     "MinCountConstraintComponent",
 )];
 
-pub fn check(root: &Path, model: Option<&str>) -> Result<()> {
-    let shapes_dir = root.join(SHACL_DIR);
+pub fn check(root: &Path, model: Option<&str>, vintage: &str) -> Result<()> {
+    let vintage = VINTAGES.iter().find(|v| v.key == vintage).ok_or_else(|| {
+        let known: Vec<&str> = VINTAGES.iter().map(|v| v.key).collect();
+        anyhow::anyhow!("no vintage {vintage:?}; there is {known:?}")
+    })?;
+    let shapes_dir = root.join(vintage.shapes_dir);
     if !shapes_dir.is_dir() {
         bail!(
             "SHACL shapes not found at {}\nRun `cargo xtask fetch-specs` first.",
@@ -82,20 +157,31 @@ pub fn check(root: &Path, model: Option<&str>) -> Result<()> {
     }
     let model_dir = match model {
         Some(m) => PathBuf::from(m),
-        None => root.join(DEFAULT_MODEL),
+        None => root.join(vintage.default_model),
     };
-    if !model_dir.is_dir() {
+    // A model set is a directory of files or a single archive — CGMES 2.4.15 conformity
+    // models ship as the latter, which is the whole reason this had to stop assuming.
+    if !model_dir.exists() {
         bail!("model set not found: {}", model_dir.display());
     }
     ensure_engine()?;
 
     let out = TempDir::new(root)?;
-    export(root, &model_dir, out.path())?;
+    export(root, vintage, &model_dir, out.path())?;
     println!("{}\n", model_dir.display());
 
     let mut failed = false;
     let mut validated = 0usize;
-    for (keyword, shape_file) in SHAPES {
+    // A tolerated violation that stopped happening is a tolerance nobody removed, and it
+    // will absorb the next real one. Track whether each was seen where it could be.
+    let mut known_seen = vec![false; KNOWN.len()];
+    let mut known_possible = vec![false; KNOWN.len()];
+    // Shapes files the engine refuses to load, pinned below so that one becoming usable —
+    // or a usable one breaking — is visible rather than absorbed.
+    let mut unusable: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (profiles, shape_file) in vintage.shapes {
+        let keyword = profiles.join("_");
+        let keyword = keyword.as_str();
         let graph = out.path().join(format!("{keyword}.ttl"));
         // A profile this model carries no data for is not a pass. Telling the two apart is
         // `cim rdf`'s job rather than this harness's — it writes no graph for a profile with
@@ -109,19 +195,49 @@ pub fn check(root: &Path, model: Option<&str>) -> Result<()> {
             .map(|t| t.lines().count())
             .unwrap_or(0);
 
-        let merged = out.path().join(format!("{keyword}-shapes.ttl"));
-        concat_shapes(
-            &[shapes_dir.join(shape_file), shapes_dir.join(HEADER_SHAPES)],
-            &merged,
-        )?;
-
-        let found = validate(&graph, &merged, out.path())?;
+        // One run per shapes file rather than one run over their concatenation. Shape
+        // *nodes* are global even though prefixes are per file: CGMES 2.4.15's
+        // `EquipmentProfile` and `FileHeaderProfile` both describe nodes under
+        // `…/IdentifiedObject/constraints/3.0#`, so joining the two files produces a
+        // property shape with two `sh:path` values, which a conforming engine refuses to
+        // load. Each file declaring its own `@base` and prefixes makes concatenation safe
+        // for *resolution*, which is a different question from identity.
+        let mut found = BTreeMap::new();
+        let mut checked_against = 0usize;
+        for shapes in [shape_file, vintage.header_shapes] {
+            match validate(&graph, &shapes_dir.join(shapes), out.path())? {
+                Outcome::Checked(results) => {
+                    checked_against += 1;
+                    for (key, n) in results {
+                        *found.entry(key).or_insert(0) += n;
+                    }
+                }
+                Outcome::ShapesUnusable(why) => {
+                    if unusable.insert((*shapes).to_owned()) {
+                        println!("  {:<8} shapes will not load: {why}", "");
+                    }
+                }
+            }
+        }
+        if checked_against == 0 {
+            println!("  {keyword:<8} shapes unusable");
+            continue;
+        }
+        for (i, (k, p, c)) in KNOWN.iter().enumerate() {
+            if *k != keyword {
+                continue;
+            }
+            known_possible[i] = true;
+            known_seen[i] |= found
+                .keys()
+                .any(|(path, component)| path == p && component == c);
+        }
         let unexpected: BTreeMap<_, _> = found
             .iter()
             .filter(|((path, component), _)| {
                 !KNOWN
                     .iter()
-                    .any(|(k, p, c)| k == keyword && p == path && c == component)
+                    .any(|(k, p, c)| *k == keyword && p == path && c == component)
             })
             .collect();
 
@@ -140,8 +256,40 @@ pub fn check(root: &Path, model: Option<&str>) -> Result<()> {
     }
 
     println!();
+    let expected: std::collections::BTreeSet<String> = vintage
+        .unusable_shapes
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    if unusable != expected {
+        println!(
+            "  the set of unloadable shapes files changed:\n    now      {unusable:?}\n                 recorded {expected:?}"
+        );
+        failed = true;
+    }
+    for (i, (k, p, c)) in KNOWN.iter().enumerate() {
+        if known_possible[i] && !known_seen[i] {
+            println!("  stale allowance: {k} {p} {c} was tolerated and did not occur");
+            failed = true;
+        }
+    }
     if failed {
         bail!("some profiles do not conform");
+    }
+    // A vintage whose published shapes a conforming engine will not load cannot be
+    // validated at all, and that is a fact about the artifacts rather than a failure of
+    // this run — but only while it is exactly the fact recorded above. The pin is what
+    // makes the day ENTSO-E fixes a file visible.
+    if !expected.is_empty() && unusable == expected && validated == 0 {
+        println!(
+            "none of {}'s {} published shapes files loads, so nothing was validated.\n\
+             That is a defect in the shapes rather than in this crate's output — a \
+             conforming engine refuses them — and the set is pinned, so one being fixed \
+             shows up here as a failure to act on.",
+            vintage.key,
+            expected.len(),
+        );
+        return Ok(());
     }
     // "Every profile conforms" is worth nothing if every profile was skipped: no graph at
     // all means the export produced nothing, which would otherwise read as a clean run.
@@ -185,21 +333,47 @@ fn engine() -> String {
 ///
 /// Going through `cim rdf` rather than through a private copy of the export is the point:
 /// what a SHACL engine judges here is what a user of the tool would actually get.
-fn export(root: &Path, model: &Path, out: &Path) -> Result<()> {
-    let status = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-        .current_dir(root)
-        .args([
-            "run",
-            "--release",
-            "--quiet",
-            "--bin",
-            "cim",
-            "--features",
-            "cli,cgmes3",
-            "--",
-            "rdf",
-            "--quiet",
-        ])
+/// Write the graphs the shapes will be run against.
+///
+/// One `cim rdf` run writes a graph per profile, which is what a vintage whose shapes are
+/// per profile needs. A vintage whose shapes constrain a whole *instance file* needs the
+/// combined graph too — CGMES 2.4.15 publishes one `EquipmentProfile` shape for the file
+/// that carries Equipment, Operation and ShortCircuit — so each such combination is asked
+/// for by name in a second run.
+fn export(root: &Path, vintage: &Vintage, model: &Path, out: &Path) -> Result<()> {
+    run_rdf(root, vintage, model, out, &[])?;
+    for (profiles, _) in vintage.shapes {
+        if profiles.len() > 1 {
+            run_rdf(root, vintage, model, out, profiles)?;
+        }
+    }
+    Ok(())
+}
+
+fn run_rdf(
+    root: &Path,
+    vintage: &Vintage,
+    model: &Path,
+    out: &Path,
+    profiles: &[&str],
+) -> Result<()> {
+    let mut cmd = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    cmd.current_dir(root).args([
+        "run",
+        "--release",
+        "--quiet",
+        "--bin",
+        "cim",
+        "--features",
+        vintage.features,
+        "--",
+        "rdf",
+        "--quiet",
+    ]);
+    for p in profiles {
+        cmd.args(["--profile", p]);
+    }
+    let status = cmd
         .arg(model)
         .arg("--out")
         .arg(out)
@@ -211,25 +385,21 @@ fn export(root: &Path, model: &Path, out: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Join several shapes files into the single graph the engine takes.
-///
-/// Safe to concatenate because each published shapes file declares its own `@base` and
-/// prefixes before using them, and Turtle allows both to be redeclared — so nothing in the
-/// second file resolves against the first file's context.
-fn concat_shapes(files: &[PathBuf], dest: &Path) -> Result<()> {
-    let mut merged = String::new();
-    for f in files {
-        let text = std::fs::read_to_string(f)
-            .with_context(|| format!("reading shapes {}", f.display()))?;
-        merged.push_str(&text);
-        merged.push('\n');
-    }
-    std::fs::write(dest, merged)?;
-    Ok(())
+/// Run the engine and count violations by `(path, constraint component)`.
+/// What one run of the engine produced.
+enum Outcome {
+    /// Findings, grouped by path and constraint. Empty means the graph conforms.
+    Checked(BTreeMap<(String, String), usize>),
+    /// The *shapes* could not be loaded, so nothing was checked against them.
+    ///
+    /// Not hypothetical and not our defect: nine of the ten CGMES 2.4.15 shapes files
+    /// ENTSO-E publishes carry property shapes with two `sh:path` values, which SHACL
+    /// forbids and a conforming engine refuses to load. A harness that treated that as a
+    /// pass would report the production vintage as validated while validating nothing.
+    ShapesUnusable(String),
 }
 
-/// Run the engine and count violations by `(path, constraint component)`.
-fn validate(graph: &Path, shapes: &Path, tmp: &Path) -> Result<BTreeMap<(String, String), usize>> {
+fn validate(graph: &Path, shapes: &Path, tmp: &Path) -> Result<Outcome> {
     let report = tmp.join("report.nt");
     let output = Command::new(engine())
         .args(["-s"])
@@ -245,14 +415,20 @@ fn validate(graph: &Path, shapes: &Path, tmp: &Path) -> Result<BTreeMap<(String,
     // Exit status 1 means "does not conform", which is a result rather than a failure;
     // anything else is the engine itself going wrong.
     if !matches!(output.status.code(), Some(0) | Some(1)) {
-        bail!(
-            "SHACL engine failed on {}:\n{}",
-            graph.display(),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("Shape Load Error") || stderr.contains("Constraint Load Error") {
+            let why = stderr
+                .lines()
+                .find(|l| l.contains("cannot have") || l.contains("must have at most"))
+                .unwrap_or("shapes graph will not load")
+                .trim()
+                .to_owned();
+            return Ok(Outcome::ShapesUnusable(why));
+        }
+        bail!("SHACL engine failed on {}:\n{stderr}", graph.display(),);
     }
     let text = std::fs::read_to_string(&report).context("reading the validation report")?;
-    Ok(count_violations(&text))
+    Ok(Outcome::Checked(count_violations(&text)))
 }
 
 const SH: &str = "http://www.w3.org/ns/shacl#";

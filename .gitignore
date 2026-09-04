@@ -28,7 +28,12 @@ target
 /fuzz/corpus/
 /fuzz/artifacts/
 
-# Internal design notes, deliberately not tracked
+# Internal architecture notes, deliberately not tracked. `tests/concepts.rs` guards
+# them and skips when the directory is absent, which is what CI sees.
+/concepts/
+# Its predecessor: a single unlinked, unchecked design document, removed because 86%
+# of it duplicated the site, the README and the rustdoc. Kept ignored so it cannot
+# come back by accident.
 CONCEPT.md
 
 # Zola build output

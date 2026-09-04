@@ -408,7 +408,7 @@ pub fn build(vintage: &str, sources: &[ProfileSource]) -> Result<Schema> {
         collect_attributes(&mut schema, doc, bit, &filters[pi])?;
     }
 
-    finish(&mut schema);
+    finish(&mut schema, &docs);
     Ok(schema)
 }
 
@@ -866,7 +866,7 @@ fn propagate_description(schema: &mut Schema) {
 }
 
 /// Sort for determinism, assign namespace prefixes, and drop dangling parents.
-fn finish(schema: &mut Schema) {
+fn finish(schema: &mut Schema, docs: &[std::rc::Rc<rdfs::Document>]) {
     propagate_description(schema);
     let known: BTreeSet<Name> = schema.classes.keys().cloned().collect();
     for class in schema.classes.values_mut() {
@@ -891,10 +891,52 @@ fn finish(schema: &mut Schema) {
     for e in schema.enums.values() {
         namespaces.insert(e.name.ns.clone());
     }
+    // What a namespace is conventionally called is stated in the vocabularies themselves,
+    // as the `xmlns:` bindings on their root elements — so ask them, rather than keeping a
+    // hand-written list that has to grow for every profile set. The list stays as the
+    // override, because for the vintages this crate ships it encodes what *instance* files
+    // use, which is what output has to match; the documents answer for everything else.
+    //
+    // Without this, ENTSO-E's Network Code vocabularies — which the design promises are a
+    // `vintage.rs` entry away — generate as `ns0` and `ns1` for namespaces their own files
+    // call `cim` and `nc`: valid output that no reader of a CIM document recognises.
+    let declared = declared_prefixes(docs);
+    let mut taken: BTreeSet<String> = BTreeSet::new();
     for (i, ns) in namespaces.into_iter().enumerate() {
-        let prefix = well_known_prefix(&ns).unwrap_or_else(|| format!("ns{i}"));
+        let prefix = well_known_prefix(&ns)
+            .or_else(|| declared.get(&ns).filter(|p| !taken.contains(*p)).cloned())
+            .unwrap_or_else(|| format!("ns{i}"));
+        taken.insert(prefix.clone());
         schema.namespaces.insert(ns, prefix);
     }
+}
+
+/// Namespace IRI -> the prefix the vocabularies bind it to, where they agree.
+///
+/// A prefix that two documents give different meanings is dropped rather than guessed at:
+/// one wrong abbreviation silently renames every element written under it.
+fn declared_prefixes(docs: &[std::rc::Rc<rdfs::Document>]) -> BTreeMap<String, String> {
+    let mut by_ns: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut by_prefix: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for doc in docs {
+        for (prefix, ns) in &doc.prefixes {
+            if prefix.is_empty() || prefix == "xml" {
+                continue;
+            }
+            by_ns.entry(ns.clone()).or_default().insert(prefix.clone());
+            by_prefix
+                .entry(prefix.clone())
+                .or_default()
+                .insert(ns.clone());
+        }
+    }
+    by_ns
+        .into_iter()
+        .filter_map(|(ns, prefixes)| {
+            let only = (prefixes.len() == 1).then(|| prefixes.into_iter().next())??;
+            (by_prefix.get(&only).is_some_and(|set| set.len() == 1)).then_some((ns, only))
+        })
+        .collect()
 }
 
 fn well_known_prefix(ns: &str) -> Option<String> {
@@ -915,6 +957,74 @@ fn well_known_prefix(ns: &str) -> Option<String> {
         }
         .to_owned(),
     )
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use super::*;
+
+    fn doc(pairs: &[(&str, &str)]) -> std::rc::Rc<rdfs::Document> {
+        std::rc::Rc::new(rdfs::Document {
+            descriptions: Vec::new(),
+            prefixes: pairs
+                .iter()
+                .map(|(p, ns)| ((*p).to_owned(), (*ns).to_owned()))
+                .collect(),
+        })
+    }
+
+    /// A vocabulary says what its namespaces are called; the generator should not have to
+    /// be told a second time.
+    #[test]
+    fn a_prefix_comes_from_the_vocabulary_that_declares_it() {
+        let declared = declared_prefixes(&[doc(&[
+            ("cim", "https://cim.ucaiug.io/ns#"),
+            ("nc", "https://cim4.eu/ns/nc#"),
+        ])]);
+        assert_eq!(
+            declared
+                .get("https://cim.ucaiug.io/ns#")
+                .map(String::as_str),
+            Some("cim")
+        );
+        assert_eq!(
+            declared.get("https://cim4.eu/ns/nc#").map(String::as_str),
+            Some("nc")
+        );
+    }
+
+    /// One abbreviation meaning two things renames every element written under it, so an
+    /// ambiguous prefix is dropped rather than guessed at.
+    #[test]
+    fn a_prefix_two_vocabularies_disagree_about_is_not_used() {
+        let declared = declared_prefixes(&[
+            doc(&[("cim", "https://cim.ucaiug.io/ns#")]),
+            doc(&[("cim", "http://iec.ch/TC57/CIM100#")]),
+        ]);
+        assert!(declared.is_empty(), "{declared:?}");
+
+        // And the same namespace under two names is equally undecidable.
+        let declared = declared_prefixes(&[
+            doc(&[("cim", "https://cim.ucaiug.io/ns#")]),
+            doc(&[("c", "https://cim.ucaiug.io/ns#")]),
+        ]);
+        assert!(declared.is_empty(), "{declared:?}");
+    }
+
+    /// The shipped vintages must keep the prefixes their *instance* files use, whatever
+    /// their vocabularies happen to bind.
+    #[test]
+    fn the_well_known_names_win() {
+        assert_eq!(
+            well_known_prefix("http://iec.ch/TC57/CIM100#").as_deref(),
+            Some("cim")
+        );
+        assert_eq!(
+            well_known_prefix("http://entsoe.eu/CIM/SchemaExtension/3/1#").as_deref(),
+            Some("entsoe")
+        );
+        assert_eq!(well_known_prefix("https://cim4.eu/ns/nc#"), None);
+    }
 }
 
 #[cfg(test)]

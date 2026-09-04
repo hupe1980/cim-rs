@@ -85,7 +85,7 @@ fn main() -> cim_rs::Result<()> {
     // … or parse them separately and combine. Merging by mRID does not care which
     // dataset an object arrived in, so this is the same model.
     let mut model = Dataset::new(SCHEMA);
-    for part in cim_rs::instance_files("MicroGrid-BE".as_ref()) {
+    for part in cim_rs::instance_files("MicroGrid-BE") {
         model.merge(Dataset::load(SCHEMA, [part])?)?;
     }
     Ok(())

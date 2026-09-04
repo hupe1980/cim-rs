@@ -227,3 +227,165 @@ fn a_mistyped_flag_is_an_error_rather_than_a_silently_ignored_one() {
         "{out:?}"
     );
 }
+
+/// Asked to export a model, the tool writes one — or says why not. It never does neither.
+///
+/// A document with no `md:FullModel` declares no profile, so there is no file set for
+/// `save_as_loaded` to reproduce: every object was skipped, the output directory was left
+/// empty, and the exit status was 0. A caller who checks the status — which is the one
+/// thing a script checks — was told the export succeeded.
+#[test]
+fn exporting_a_model_whose_files_declare_no_profile_writes_it_anyway() {
+    let dir = scratch("headerless");
+    let input = dir.join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    std::fs::write(
+        input.join("model.xml"),
+        format!(
+            r##"<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="{NS}">
+  <cim:ACLineSegment rdf:ID="_{LOCATION}">
+    <cim:IdentifiedObject.name>Line</cim:IdentifiedObject.name>
+    <cim:ACLineSegment.r>2.2</cim:ACLineSegment.r>
+  </cim:ACLineSegment>
+</rdf:RDF>
+"##
+        ),
+    )
+    .unwrap();
+
+    let out = dir.join("out");
+    let result = cim()
+        .args(["export"])
+        .arg(&input)
+        .arg("--out")
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let written: Vec<_> = std::fs::read_dir(&out).unwrap().flatten().collect();
+    assert_eq!(written.len(), 1, "expected one file, got {written:?}");
+    let text = std::fs::read_to_string(written[0].path()).unwrap();
+    assert!(text.contains("ACLineSegment"), "{text}");
+    // The shape of the output is not the shape of the input, so it says so.
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("no input file declares a profile"),
+        "the fallback was silent: {:?}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    common::assert_well_formed("fallback export", &text);
+
+    // And the flag the note names does what the note says: the file comes back as itself,
+    // under its own name, with a header declaring the profile the caller supplied.
+    let named = dir.join("named");
+    let result = cim()
+        .args(["export"])
+        .arg(&input)
+        .args(["--assume-profile", "EQ"])
+        .arg("--out")
+        .arg(&named)
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let text = std::fs::read_to_string(named.join("model.xml")).expect("model.xml");
+    assert!(text.contains("<md:FullModel"), "{text}");
+    assert!(
+        text.contains("CoreEquipment-EU"),
+        "the header does not declare the assumed profile:\n{text}"
+    );
+}
+
+/// `diff` and `apply` are halves of one operation, so the tool is tested as one.
+///
+/// The library could read and apply a `dm:DifferenceModel` from the start and the tool
+/// could only produce one, which made the shell a one-way door: the receiving half of IEC
+/// 61970-552's incremental exchange — the half a consumer actually runs — had no command.
+#[test]
+fn a_change_set_computed_by_the_tool_can_be_applied_by_the_tool() {
+    /// A one-object Equipment file — a scalar change, which is what a statement *can*
+    /// carry. (`location_file`'s compound is deliberately the one that cannot.)
+    fn named(dir: &Path, name: &str) {
+        let text = format!(
+            r##"<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="{NS}"
+         xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#">
+  <md:FullModel rdf:about="urn:uuid:11111111-1111-4111-8111-111111111111">
+    <md:Model.profile>http://iec.ch/TC57/ns/CIM/CoreEquipment-EU/3.0</md:Model.profile>
+  </md:FullModel>
+  <cim:Substation rdf:ID="_{LOCATION}">
+    <cim:IdentifiedObject.mRID>{LOCATION}</cim:IdentifiedObject.mRID>
+    <cim:IdentifiedObject.name>{name}</cim:IdentifiedObject.name>
+  </cim:Substation>
+</rdf:RDF>
+"##
+        );
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("EQ.xml"), text).unwrap();
+    }
+
+    let dir = scratch("apply");
+    let base = dir.join("base");
+    let target = dir.join("target");
+    named(&base, "before");
+    named(&target, "after");
+
+    let change = dir.join("change_DIFF.xml");
+    let made = cim()
+        .args(["diff"])
+        .arg(&base)
+        .arg(&target)
+        .arg("--out")
+        .arg(&change)
+        .output()
+        .unwrap();
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+
+    let out = dir.join("out");
+    let applied = cim()
+        .args(["apply"])
+        .arg(&base)
+        .args(["--change"])
+        .arg(&change)
+        .arg("--out")
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(
+        applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+
+    // The result is the target: same postal code, and a document a parser that is not ours
+    // accepts.
+    let written = std::fs::read_to_string(out.join("EQ.xml")).expect("EQ.xml");
+    common::assert_well_formed("applied", &written);
+    assert!(
+        written.contains("<cim:IdentifiedObject.name>after<"),
+        "{written}"
+    );
+    assert!(!written.contains("before"), "{written}");
+
+    // And a change set is required rather than assumed.
+    let missing = cim()
+        .args(["apply"])
+        .arg(&base)
+        .arg("--out")
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("--change"),
+        "{}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+}

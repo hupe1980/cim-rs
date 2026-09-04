@@ -4,7 +4,7 @@
 # `[lib] name = "cim"` would recover the shorter import at the cost of an import path that
 # does not match what the reader typed into `cargo add`.
 name = "cim-rs"
-version = "0.1.0"
+version = "0.2.0"
 description = "IEC Common Information Model (CIM/CGMES) for power systems: typed model, CIM/XML I/O, profile-aware validation"
 keywords = ["cim", "cgmes", "iec61970", "power-systems", "grid"]
 categories = ["science", "parser-implementations", "encoding"]

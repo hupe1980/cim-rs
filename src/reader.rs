@@ -282,6 +282,9 @@ struct State {
     source: Option<usize>,
     /// Whether the header has been registered with the dataset yet.
     header_registered: bool,
+    /// Slot claimed for a document that had not named itself yet, to be filled in if it
+    /// turns out to have an `md:FullModel` after all.
+    placeholder_slot: Option<usize>,
 }
 
 struct Parser<'a> {
@@ -416,6 +419,7 @@ impl<'a> Parser<'a> {
                         // lost and would overwrite whichever object came next.
                         Ctx::Object => {
                             if let Some(o) = st.object.take() {
+                                self.ensure_source(&mut st, &mut dataset);
                                 self.commit(o, &st, &mut dataset, pos);
                                 st.objects_read += 1;
                             }
@@ -496,6 +500,7 @@ impl<'a> Parser<'a> {
                         }
                         Ctx::Object => {
                             if let Some(o) = st.object.take() {
+                                self.ensure_source(&mut st, &mut dataset);
                                 self.commit(o, &st, &mut dataset, pos);
                                 st.objects_read += 1;
                             }
@@ -522,11 +527,12 @@ impl<'a> Parser<'a> {
         }
 
         // A file without a header still occupies a slot, so that the slot a later file
-        // gets matches its position in `Dataset::headers`.
+        // gets matches its position in `Dataset::headers`. `ensure_source` has normally
+        // claimed it already; this covers a document that declared no objects either.
         if !st.header_registered
             && let Some(ds) = dataset.as_mut()
         {
-            ds.push_header(ModelHeader::new(ModelKind::Full));
+            ds.push_header(self.placeholder_header());
         }
 
         let mut header = st.header;
@@ -584,6 +590,39 @@ impl<'a> Parser<'a> {
         );
     }
 
+    /// The header slot a document with no `md:FullModel` still gets.
+    ///
+    /// Named after the document it came from, and declaring the profile the caller assumed
+    /// where there is one: a file the caller has identified *is* a file of that profile,
+    /// and every export path asks the header which profiles it serves. Without this the
+    /// answer was "none", which made a headerless model export as an empty directory.
+    fn placeholder_header(&self) -> ModelHeader {
+        let mut h = ModelHeader::new(ModelKind::Full);
+        h.source = self.source.clone();
+        if let Some(p) = self.options.assume_profile {
+            h.profiles
+                .push(self.schema.profile(p).version_iri.to_owned());
+        }
+        h
+    }
+
+    /// Make sure this document owns a header slot before its first object is stored.
+    ///
+    /// Objects record the file they came from as they are committed, so the slot has to
+    /// exist by then: a document with no `md:FullModel` would otherwise leave its objects
+    /// belonging to no file, and nothing to export them back into.
+    fn ensure_source(&mut self, st: &mut State, dataset: &mut Option<&mut Dataset>) {
+        if st.header_registered || st.source.is_some() {
+            return;
+        }
+        st.header_registered = true;
+        if let Some(ds) = dataset.as_mut() {
+            let slot = ds.push_header(self.placeholder_header());
+            st.placeholder_slot = Some(slot);
+            st.source = Some(slot);
+        }
+    }
+
     /// Register the just-parsed header with the dataset and adopt what it declares.
     fn register_header(&mut self, st: &mut State, dataset: &mut Option<&mut Dataset>) {
         let Some(h) = st.header.as_ref() else { return };
@@ -595,6 +634,18 @@ impl<'a> Parser<'a> {
         if declared != 0 {
             st.profile_mask = declared;
         }
+        // A document that names itself after its first object already has a slot; fill it
+        // in rather than describing the same file twice.
+        if let Some(slot) = st.placeholder_slot.take()
+            && let Some(ds) = dataset.as_mut()
+        {
+            let mut h = h.clone();
+            if h.source.is_none() {
+                h.source = self.source.clone();
+            }
+            ds.set_header(slot, h);
+            return;
+        }
         if st.header_registered {
             return;
         }
@@ -603,6 +654,16 @@ impl<'a> Parser<'a> {
             let mut h = h.clone();
             if h.source.is_none() {
                 h.source = self.source.clone();
+            }
+            // A caller who says which profile an undeclared file holds has said what the
+            // file *is*, so the header says so too. Without this the values are attributed
+            // and the file is still not reproducible as itself: every export path asks the
+            // header which profiles it serves, and this one would answer "none".
+            if h.profiles.is_empty()
+                && let Some(p) = self.options.assume_profile
+            {
+                h.profiles
+                    .push(self.schema.profile(p).version_iri.to_owned());
             }
             st.source = Some(ds.push_header(h));
         }

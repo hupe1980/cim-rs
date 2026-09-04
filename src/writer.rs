@@ -43,6 +43,34 @@ pub enum IdStyle {
 }
 
 /// Options controlling serialization.
+/// Where a document's `md:FullModel` header comes from.
+///
+/// IEC 61970-552 gives every instance file a header, and a consumer needs it: it is what
+/// says which profiles the file serves and which models it depends on. Deriving one is
+/// therefore the default, so that the obvious call produces a document another
+/// implementation will accept — writing none has to be asked for.
+///
+/// The derivation belongs here rather than in the callers: two entry points that each
+/// decide for themselves produce two behaviours, and only one of them ends up documented.
+#[derive(Clone, Debug, Default)]
+pub enum HeaderSource {
+    /// Derive one from the dataset: identified by its content, declaring the profiles
+    /// actually written.
+    ///
+    /// Deterministic and clock-free — the identifier is an RFC 4122 v5 UUID over the
+    /// model's content, so the same model exports to the same header twice.
+    #[default]
+    Derive,
+    /// Write this header, which is how a model is written back as the file set it came
+    /// from. An identifier is filled in from the model's content if it has none.
+    ///
+    /// Boxed because a `ModelHeader` is large next to the other two answers, and this
+    /// enum is copied into every `WriteOptions`.
+    Given(Box<ModelHeader>),
+    /// Write no header. Not a conforming instance file.
+    Omit,
+}
+
 #[derive(Clone, Debug)]
 pub struct WriteOptions {
     /// Write only attributes belonging to these profiles; zero means "everything".
@@ -54,8 +82,8 @@ pub struct WriteOptions {
     pub id_style: IdStyle,
     /// Indent nested elements. Off produces smaller files.
     pub pretty: bool,
-    /// Header to emit. Without one, no `md:FullModel` element is written.
-    pub header: Option<ModelHeader>,
+    /// Where the document's `md:FullModel` comes from.
+    pub header: HeaderSource,
     /// Emit the XML declaration.
     pub xml_declaration: bool,
 }
@@ -66,7 +94,7 @@ impl Default for WriteOptions {
             profiles: 0,
             id_style: IdStyle::Auto,
             pretty: true,
-            header: None,
+            header: HeaderSource::default(),
             xml_declaration: true,
         }
     }
@@ -86,8 +114,18 @@ impl WriteOptions {
         }
     }
 
+    /// Write `header` rather than a derived one.
     pub fn with_header(mut self, header: ModelHeader) -> Self {
-        self.header = Some(header);
+        self.header = HeaderSource::Given(Box::new(header));
+        self
+    }
+
+    /// Write no header at all.
+    ///
+    /// The result is not a conforming instance file. Use it for a fragment, or where the
+    /// caller assembles the document itself.
+    pub fn headerless(mut self) -> Self {
+        self.header = HeaderSource::Omit;
         self
     }
     pub fn with_id_style(mut self, style: IdStyle) -> Self {
@@ -124,19 +162,19 @@ where
     list.sort_by(|a, b| a.mrid().cmp(b.mrid()));
 
     w.start_document(options)?;
-    if let Some(h) = &options.header {
-        // IEC 61970-552 requires `md:FullModel rdf:about`, and a header a caller built by
-        // hand may not have one. The model's content identifier stands in: deterministic,
-        // distinct per model, and derived rather than invented — where the nil UUID would
-        // be a document this crate's own validator rejects.
-        match h.id {
-            Some(_) => w.header(h)?,
-            None => {
-                let mut h = h.clone();
-                h.id = Some(dataset.content_id());
-                w.header(&h)?;
-            }
+    // IEC 61970-552 requires `md:FullModel rdf:about`, and a header a caller built by hand
+    // may not have one. The model's content identifier stands in: deterministic, distinct
+    // per model, and derived rather than invented — where the nil UUID would be a document
+    // this crate's own validator rejects.
+    match &options.header {
+        HeaderSource::Omit => {}
+        HeaderSource::Given(h) if h.id.is_some() => w.header(h)?,
+        HeaderSource::Given(h) => {
+            let mut h = h.clone();
+            h.id = Some(dataset.content_id());
+            w.header(&h)?;
         }
+        HeaderSource::Derive => w.header(&derive_header(dataset, options.profiles))?,
     }
     for obj in list {
         w.object(obj, options)?;
@@ -149,10 +187,9 @@ pub fn write_profile<W: Write>(
     dataset: &Dataset,
     profile: ProfileId,
     out: W,
-    header: Option<ModelHeader>,
     options: &WriteOptions,
 ) -> Result<()> {
-    write_profiles(dataset, profile.mask(), out, header, options)
+    write_profiles(dataset, profile.mask(), out, options)
 }
 
 /// Write the slice of a dataset belonging to a set of profiles.
@@ -164,13 +201,11 @@ pub fn write_profiles<W: Write>(
     dataset: &Dataset,
     profiles: ProfileMask,
     out: W,
-    header: Option<ModelHeader>,
     options: &WriteOptions,
 ) -> Result<()> {
     let schema = dataset.schema();
     let mut opts = options.clone();
     opts.profiles = profiles;
-    opts.header = header;
 
     let ids: Vec<_> = dataset
         .iter()
@@ -193,10 +228,14 @@ pub fn write_difference<W: Write>(
     out: W,
     options: &WriteOptions,
 ) -> Result<()> {
-    let mut header = options
-        .header
-        .clone()
-        .unwrap_or_else(|| diff.header.clone());
+    let mut header = match &options.header {
+        HeaderSource::Given(h) => (**h).clone(),
+        // A change set is *about* a model, so a derived header cannot be built from data
+        // this function does not have. The difference's own header is the answer to both
+        // `Derive` and `Omit`: a `dm:DifferenceModel` element is the document's root
+        // content, not decoration that can be left out.
+        _ => diff.header.clone(),
+    };
     header.kind = ModelKind::Difference;
 
     let mut w = Writer::new(out, schema, options.pretty);
@@ -206,10 +245,12 @@ pub fn write_difference<W: Write>(
         w.bind_statement_namespaces(s);
     }
     let mut opts = options.clone();
-    opts.header = Some(header);
+    opts.header = HeaderSource::Given(Box::new(header));
     w.start_document(&opts)?;
 
-    let h = opts.header.as_ref().expect("header set above");
+    let HeaderSource::Given(h) = &opts.header else {
+        unreachable!("set to Given above")
+    };
     w.header_open(h)?;
     w.header_body(h)?;
     // 61970-552 lists what is being replaced before what replaces it.
@@ -364,12 +405,16 @@ impl<W: Write> Writer<W> {
         // prefix is declared exactly once and always before its first use.
         self.ns.bind("md", MD_NS);
         self.ns.bind("dm", DM_NS);
-        self.extra_prefixes = options.header.as_ref().map_or_else(Vec::new, |h| {
-            h.extra
+        // A given header may carry vendor properties in namespaces the schema knows
+        // nothing about; a derived one never does.
+        self.extra_prefixes = match &options.header {
+            HeaderSource::Given(h) => h
+                .extra
                 .iter()
                 .map(|p| self.ns.bind(&p.prefix, &p.ns))
-                .collect()
-        });
+                .collect(),
+            _ => Vec::new(),
+        };
 
         if options.xml_declaration {
             self.out
@@ -891,6 +936,67 @@ pub fn element_class(
         .chain(schema.class(class).ancestors.iter().copied())
         .find(|&c| declared(c) && complete(c))
         .unwrap_or(class)
+}
+
+/// The header a document gets when the caller supplies none.
+///
+/// Public so a caller can derive one, adjust it — a modelling authority set, a scenario
+/// time — and pass it back through [`WriteOptions::with_header`].
+///
+/// Declares exactly the profiles being written — the mask when one is given, otherwise
+/// every profile the data actually covers — because `md:Model.profile` is how a consumer
+/// decides what a file is, and claiming a profile the file says nothing about is worse
+/// than claiming none.
+///
+/// The identifier is an RFC 4122 v5 UUID over the vintage, those profiles and the model's
+/// content identifier: deterministic, distinct per model, and needing no clock and no
+/// dependency. `Model.created` is deliberately absent rather than invented — this crate
+/// reads no clock, and a timestamp that is not when the model was made is worse than an
+/// absent one.
+pub fn derive_header(dataset: &Dataset, profiles: ProfileMask) -> ModelHeader {
+    derive_header_with(
+        dataset.schema(),
+        if profiles == 0 {
+            dataset.profiles()
+        } else {
+            profiles
+        },
+        &dataset.content_id(),
+    )
+}
+
+/// The same, from an already-computed content identifier.
+///
+/// Split out because `Dataset::content_id` walks the whole model — 88 ms on the 112 MiB
+/// `RealGrid` — and an export that writes eleven profile files would otherwise walk it
+/// eleven times to derive eleven headers that all name the same model.
+pub(crate) fn derive_header_with(
+    schema: &'static Schema,
+    covered: ProfileMask,
+    content: &Mrid,
+) -> ModelHeader {
+    let iris: Vec<String> = schema
+        .profiles
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| covered & (1u64 << i) != 0)
+        .map(|(_, p)| p.version_iri.to_owned())
+        .collect();
+
+    let mut name = format!("{}\u{1e}", schema.vintage);
+    for iri in &iris {
+        name.push_str(iri);
+        name.push('\u{1e}');
+    }
+    name.push_str(&content.to_string());
+
+    ModelHeader {
+        kind: ModelKind::Full,
+        id: Some(Mrid::new_v5(&Dataset::DERIVED_NS, name.as_bytes())),
+        profiles: iris,
+        version: Some("1".to_owned()),
+        ..Default::default()
+    }
 }
 
 /// How an object of `class` is identified in a file serving `options.profiles`.

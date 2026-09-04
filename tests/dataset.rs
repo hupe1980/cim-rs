@@ -149,7 +149,7 @@ fn a_value_its_class_cannot_carry_is_reported_rather_than_silently_dropped() {
     let mut ds = Dataset::new(SCHEMA);
     let mut o = Object::new(classes::Terminal, Mrid::parse(LINE));
     // `ACLineSegment.r` on a `Terminal`: the public setter cannot know better.
-    o.set(attributes::ac_line_segment::r, Value::Float(1.5));
+    o.set(attributes::ac_line_segment::r, Value::from(1.5));
     ds.insert(o);
 
     let report = ds.validate();
@@ -178,9 +178,9 @@ fn reclassifying_sideways_sheds_the_values_the_new_class_cannot_carry() {
     let mut o = Object::new(classes::LinearShuntCompensator, Mrid::parse(LINE));
     o.set(
         attributes::linear_shunt_compensator::bPerSection,
-        Value::Float(0.000346),
+        Value::from(0.000346),
     );
-    o.set(attributes::shunt_compensator::nomU, Value::Float(380.0));
+    o.set(attributes::shunt_compensator::nomU, Value::from(380.0));
     let id = ds.insert(o);
 
     let shed = ds.reclassify(id, classes::NonlinearShuntCompensator);

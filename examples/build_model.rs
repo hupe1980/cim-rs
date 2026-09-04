@@ -110,5 +110,5 @@ fn main() -> cim_rs::Result<()> {
     }
 
     // No header supplied, so a conforming one is derived — identifier included.
-    cim_rs::writer::write_profile(&ds, eq, std::io::stdout().lock(), None, &Default::default())
+    cim_rs::writer::write_profile(&ds, eq, std::io::stdout().lock(), &Default::default())
 }

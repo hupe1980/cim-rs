@@ -146,6 +146,18 @@ impl Dataset {
         self.headers.len() - 1
     }
 
+    /// Replace the header in slot `index`, keeping the objects already recorded against it.
+    ///
+    /// A document that names itself only *after* its first object — legal XML, and not what
+    /// IEC 61970-552's layout suggests — claims a slot before its `md:FullModel` is read.
+    /// Pushing the real header afterwards would leave the file described twice and its
+    /// objects attached to the placeholder.
+    pub fn set_header(&mut self, index: usize, header: ModelHeader) {
+        if let Some(slot) = self.headers.get_mut(index) {
+            *slot = header;
+        }
+    }
+
     /// Record that the file in header slot `source` contained `id`.
     pub fn record_source(&mut self, source: usize, id: ObjectId) {
         let Some(list) = self.by_source.get_mut(source) else {
@@ -676,7 +688,9 @@ fn fold_value(buf: &mut Vec<u8>, v: &Value) {
         }
         Value::Float(f) => {
             buf.push(3);
-            buf.extend_from_slice(&f.to_bits().to_le_bytes());
+            // The number, not its spelling: two models that differ only in how a producer
+            // formatted a float are the same model, and `Real`'s equality says so too.
+            buf.extend_from_slice(&f.get().to_bits().to_le_bytes());
         }
         Value::Text(s) => {
             buf.push(4);

@@ -88,7 +88,7 @@ fn round_trip(ds: &Dataset) -> Dataset {
         let mut buf = Vec::new();
         // `IdStyle::Auto`: rdf:ID or rdf:about is decided per class from the schema.
         let options = WriteOptions::default();
-        cim_rs::writer::write_profile(ds, cov.profile, &mut buf, None, &options).unwrap();
+        cim_rs::writer::write_profile(ds, cov.profile, &mut buf, &options).unwrap();
         files.push((cov.profile, buf));
     }
     assert!(!files.is_empty(), "nothing was exported");
@@ -183,7 +183,7 @@ fn writing_is_deterministic() {
     let eq = SCHEMA.profile_by_keyword("EQ").unwrap();
     let render = || {
         let mut buf = Vec::new();
-        cim_rs::writer::write_profile(&ds, eq, &mut buf, None, &WriteOptions::default()).unwrap();
+        cim_rs::writer::write_profile(&ds, eq, &mut buf, &WriteOptions::default()).unwrap();
         buf
     };
     assert_eq!(
@@ -214,8 +214,13 @@ fn output_is_valid_xml_and_reparses_strictly() {
         ..Default::default()
     };
     let mut buf = Vec::new();
-    cim_rs::writer::write_profile(&ds, eq, &mut buf, Some(header), &WriteOptions::default())
-        .unwrap();
+    cim_rs::writer::write_profile(
+        &ds,
+        eq,
+        &mut buf,
+        &WriteOptions::default().with_header(header),
+    )
+    .unwrap();
 
     let text = String::from_utf8(buf.clone()).expect("output must be UTF-8");
     assert!(text.starts_with("<?xml"), "missing XML declaration");
@@ -327,8 +332,7 @@ fn a_multi_profile_file_is_not_split_apart() {
 
     let render = |mask| {
         let mut buf = Vec::new();
-        cim_rs::writer::write_profiles(&ds, mask, &mut buf, None, &WriteOptions::default())
-            .unwrap();
+        cim_rs::writer::write_profiles(&ds, mask, &mut buf, &WriteOptions::default()).unwrap();
         buf
     };
 
@@ -383,7 +387,7 @@ fn a_programmatic_export_writes_a_conforming_header() {
         Value::Text("11111111-1111-4111-8111-111111111111".into()),
     );
     o.set(attrs::identified_object::name, Value::Text("L".into()));
-    o.set(attrs::ac_line_segment::r, Value::Float(1.5));
+    o.set(attrs::ac_line_segment::r, Value::from(1.5));
     ds.insert(o);
 
     let dir = std::env::temp_dir().join(format!("cim-progheader-{}", std::process::id()));
@@ -431,7 +435,7 @@ fn a_programmatic_export_writes_a_conforming_header() {
             .unwrap(),
     )
     .unwrap()
-    .set(attrs::ac_line_segment::r, Value::Float(9.0));
+    .set(attrs::ac_line_segment::r, Value::from(9.0));
     assert_ne!(before, ds.content_id(), "an edited model kept its identity");
 
     std::fs::remove_dir_all(&dir).ok();

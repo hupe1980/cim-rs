@@ -92,6 +92,12 @@ in one document. The RDFS says which is which; guessing from the profile keyword
 tens of thousands of identifiers.</p>
 </div>
 <div class="card">
+<h3>A number's spelling is information</h3>
+<p>Published models write <code>2.62637E-05</code> and <code>250.000000</code>. Each value
+keeps the form it arrived in, while equality compares numbers — so a re-export is the file
+that was read, and a difference never reports a reformatting as a change.</p>
+</div>
+<div class="card">
 <h3>Output has to satisfy someone else</h3>
 <p>A tolerant reader accepting its own output proves nothing. Every document is checked
 against the XML and XML Namespaces recommendations, and every RDF export against the
@@ -147,6 +153,7 @@ cim info     MicroGrid-BE/                  # what a model set contains
 cim validate MicroGrid-BE/ --rule CIM0007   # exits 1 on any error
 cim rdf      MicroGrid-BE/ --out graphs/    # one typed RDF graph per profile with data
 cim diff     before/ after/ > change.xml    # the change set between two states
+cim apply    before/ --change change.xml --out after/   # and applying one
 ```
 
 <div class="cta-links">

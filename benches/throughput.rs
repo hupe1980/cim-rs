@@ -288,7 +288,7 @@ fn bench_corpus() {
             }
             let options = WriteOptions {
                 profiles,
-                header: Some(header.clone()),
+                header: cim_rs::writer::HeaderSource::Given(Box::new(header.clone())),
                 ..Default::default()
             };
             let mut buf = Vec::new();

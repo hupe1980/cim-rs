@@ -6,12 +6,13 @@
 //! cim validate MicroGrid-BE/ --rule CIM0007
 //! cim rdf      MicroGrid-BE/ --out graphs/
 //! cim diff     before/ after/ --out change_DIFF.xml
+//! cim apply    before/ --change change_DIFF.xml --out updated/
 //! ```
 //!
 //! Everything here is a thin shell around the public API — deliberately, so that the tool
 //! cannot do something a caller of the library could not, and so that a gap in the tool is
 //! a gap in the library. It takes no dependency of its own, including for argument
-//! parsing: the grammar is six subcommands and a handful of flags, and a parser for that
+//! parsing: the grammar is seven subcommands and a handful of flags, and a parser for that
 //! is shorter than the manifest entry for a crate that would do it.
 //!
 //! Output goes through an explicit writer rather than `println!` for one reason:
@@ -39,6 +40,7 @@ commands:
   export     <input>... --out DIR    write the model back as CIM/XML
   rdf        <input>... --out DIR    export as RDF, one graph per profile with data
   diff       <base> <target>         compute a dm:DifferenceModel
+  apply      <input>... --change F    apply a change set and write the result
   schema                             what the built-in vintages declare
 
 an <input> is a CIM/XML file, a zip archive, or a directory holding either; several are
@@ -48,6 +50,8 @@ options:
   -o, --out PATH    where to write (a directory, or a file for `diff`)
   --vintage KEY     which schema to read against (default: detected from the input)
   --profile KEY     restrict `rdf` and `diff` to one profile, e.g. SSH
+  --assume-profile KEY
+                    profile to attribute values to when a file declares none
   --rule CODE       show only this rule in `validate`, e.g. CIM0007
   --ntriples        write N-Triples rather than Turtle
   --merged          `rdf` writes one graph for the whole model, not one per profile
@@ -99,6 +103,7 @@ fn run(out: &mut dyn Write) -> Result<ExitCode, Fail> {
         "export" => export(out, &args),
         "rdf" => rdf(out, &args),
         "diff" => diff(out, &args),
+        "apply" => apply(out, &args),
         other => Err(format!("unknown command {other:?}; `cim --help` lists them").into()),
     }
 }
@@ -217,9 +222,34 @@ fn export(out: &mut dyn Write, args: &Args) -> Result<ExitCode, Fail> {
     let schema = args.schema()?;
     let dir = args.out_dir()?;
     let (ds, report) = args.load(schema)?;
-    let saved = ds
+    let mut saved = ds
         .save_as_loaded(&dir)
         .map_err(|e| format!("writing to {}: {e}", dir.display()))?;
+
+    // `save_as_loaded` reproduces a *file set*, and an input that declared no profile has
+    // none to reproduce — every object comes back unwritten. Asked to export a model,
+    // write the model: one file per profile, with a derived header, and a note on stderr
+    // saying why the shape of the output is not the shape of the input.
+    if saved.unwritten > 0 && saved.written.is_empty() && !ds.is_empty() {
+        let _ = writeln!(
+            io::stderr(),
+            "note: no input file declares a profile, so there is no file set to reproduce; \
+             writing one file per profile instead (--assume-profile names one explicitly)"
+        );
+        let stem = args
+            .inputs
+            .first()
+            .and_then(|p| p.file_stem())
+            .map_or_else(|| "model".to_owned(), |s| s.to_string_lossy().into_owned());
+        let written = ds
+            .save_all_profiles(&dir, &stem)
+            .map_err(|e| format!("writing to {}: {e}", dir.display()))?;
+        saved = cim_rs::SaveReport {
+            written,
+            ..Default::default()
+        };
+    }
+
     // `--quiet` means the same thing here as in `rdf`: the files are on disk, so listing
     // them is a convenience rather than the result. What was *skipped* still goes to
     // stderr, because that is the caller not getting what they asked for.
@@ -230,6 +260,16 @@ fn export(out: &mut dyn Write, args: &Args) -> Result<ExitCode, Fail> {
     }
     for s in &saved.skipped {
         let _ = writeln!(io::stderr(), "skipped: {s}");
+    }
+    if saved.unwritten > 0 {
+        let _ = writeln!(
+            io::stderr(),
+            "warning: {} object(s) belong to no exported file",
+            saved.unwritten
+        );
+    }
+    if saved.written.is_empty() && !ds.is_empty() {
+        return Err("nothing was written".to_owned().into());
     }
     Ok(exit_on_errors(&report))
 }
@@ -249,27 +289,29 @@ fn rdf(out: &mut dyn Write, args: &Args) -> Result<ExitCode, Fail> {
     // profile constrains a reference's target to the classes *it* declares, so a merged
     // graph reports violations no instance file could have had. `--merged` is for a triple
     // store, where the whole model in one graph is the point.
-    let profiles: Vec<Option<ProfileId>> = if args.merged {
-        vec![None]
-    } else if args.profile.is_some() {
-        vec![Some(args.profile_id(schema)?)]
+    // (label, mask) pairs: one graph each. Named profiles become a *single* graph, because
+    // asking for three is asking for the file that carries all three.
+    let graphs: Vec<(String, cim_rs::ProfileMask)> = if args.merged {
+        vec![("model".to_owned(), 0)]
+    } else if !args.profile.is_empty() {
+        vec![(args.profile_label(schema)?, args.profile_mask(schema)?)]
     } else {
         (0..schema.profiles.len())
-            .map(|i| Some(ProfileId(i as u16)))
+            .map(|i| {
+                let p = ProfileId(i as u16);
+                (schema.profile(p).keyword.to_owned(), p.mask())
+            })
             .collect()
     };
 
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut empty: Vec<&str> = Vec::new();
-    for profile in profiles {
-        let (name, mask) = match profile {
-            Some(p) => (schema.profile(p).keyword, p.mask()),
-            None => ("model", 0),
-        };
+    for (name, mask) in &graphs {
+        let (name, mask) = (name.as_str(), *mask);
         // A profile the model carries no data for gets no file: a graph of nothing but the
         // loaded files' headers reads as an export and validates as one. `--merged` is
         // exempt — it asks for *the model*, and an empty model is a legitimate export.
-        if profile.is_some() && !cim_rs::rdf::has_content(&ds, mask) {
+        if mask != 0 && !cim_rs::rdf::has_content(&ds, mask) {
             empty.push(name);
             continue;
         }
@@ -309,8 +351,8 @@ fn diff(out: &mut dyn Write, args: &Args) -> Result<ExitCode, Fail> {
     let after = load_one(schema, target, args)?;
 
     let mut options = cim_rs::DiffOptions::default();
-    if args.profile.is_some() {
-        options = options.profiles(args.profile_id(schema)?.mask());
+    if !args.profile.is_empty() {
+        options = options.profiles(args.profile_mask(schema)?);
     }
     let change = before.difference_to(&after, &options);
     let _ = writeln!(
@@ -359,6 +401,65 @@ fn diff(out: &mut dyn Write, args: &Args) -> Result<ExitCode, Fail> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Apply one or more change sets to a model and write the result.
+///
+/// The counterpart of `diff`, and the half IEC 61970-552's incremental exchange is *for*:
+/// a producer sends a `dm:DifferenceModel` and the receiver applies it to the model it
+/// already holds. The library could read and apply one from the start; the tool could
+/// compute one and not apply it, which made the shell a one-way door.
+///
+/// Change sets are named with `--change` rather than found among the inputs, because the
+/// difference between "this file is part of my model" and "this file is a change to it" is
+/// the caller's to state, and getting it wrong silently writes the change set back out as
+/// though it were data.
+fn apply(out: &mut dyn Write, args: &Args) -> Result<ExitCode, Fail> {
+    let schema = args.schema()?;
+    let dir = args.out_dir()?;
+    if args.change.is_empty() {
+        return Err("apply needs at least one --change FILE".to_owned().into());
+    }
+    let (mut ds, report) = args.load(schema)?;
+
+    let mut applied = cim_rs::Report::default();
+    for path in &args.change {
+        let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+        let diff =
+            cim_rs::reader::read_difference(schema, std::io::BufReader::new(file), name.as_deref())
+                .map_err(|e| format!("{}: {e}", path.display()))?
+                .ok_or_else(|| {
+                    format!(
+                        "{} holds no dm:DifferenceModel; `cim diff` writes one",
+                        path.display()
+                    )
+                })?;
+        // In the order given: change sets are cumulative, and 552 makes a difference a
+        // statement about one model state.
+        applied.extend(ds.apply_difference(&diff));
+    }
+
+    // Retracting everything an object said is as close to deleting it as the statement
+    // syntax gets, so the result would otherwise carry identifiers with nothing attached.
+    let pruned = ds.prune_empty();
+
+    let saved = ds
+        .save_as_loaded(&dir)
+        .map_err(|e| format!("writing to {}: {e}", dir.display()))?;
+    if !args.quiet {
+        for p in &saved.written {
+            writeln!(out, "{}", p.display())?;
+        }
+        if pruned > 0 {
+            let _ = writeln!(
+                io::stderr(),
+                "pruned {pruned} object(s) the change left empty"
+            );
+        }
+    }
+    print_report(&mut io::stderr(), &applied, args.limit, "applying")?;
+    Ok(exit_on_errors(&report))
+}
+
 // ---------------------------------------------------------------------------
 // Shared plumbing
 // ---------------------------------------------------------------------------
@@ -384,6 +485,14 @@ impl From<io::Error> for Fail {
     }
 }
 
+/// Resolve a profile keyword, naming the ones that exist when it is not one.
+fn profile_by_keyword(schema: &'static Schema, key: &str) -> Result<ProfileId, String> {
+    schema.profile_by_keyword(key).ok_or_else(|| {
+        let known: Vec<&str> = schema.profiles.iter().map(|p| p.keyword).collect();
+        format!("no profile {key:?} in {}; it has {known:?}", schema.vintage)
+    })
+}
+
 fn no_vintage() -> String {
     "this build has no CIM vintage compiled in; rebuild with --features cgmes3".to_owned()
 }
@@ -394,7 +503,7 @@ fn load_one(schema: &'static Schema, input: &Path, args: &Args) -> Result<Datase
         return Err(format!("no CIM inputs under {}", input.display()));
     }
     let mut ds = Dataset::new(schema);
-    ds.load_files(&files, &args.read_options())
+    ds.load_files(&files, &args.read_options(schema)?)
         .map_err(|e| format!("{}: {e}", input.display()))?;
     Ok(ds)
 }
@@ -438,7 +547,9 @@ struct Args {
     inputs: Vec<PathBuf>,
     out: Option<PathBuf>,
     vintage: Option<String>,
-    profile: Option<String>,
+    profile: Vec<String>,
+    assume_profile: Option<String>,
+    change: Vec<PathBuf>,
     rule: Option<String>,
     ntriples: bool,
     merged: bool,
@@ -468,7 +579,13 @@ impl Args {
                 "--merged" => args.merged = true,
                 "-o" | "--out" => args.out = Some(PathBuf::from(value(&mut raw, "--out")?)),
                 "--vintage" => args.vintage = Some(value(&mut raw, "--vintage")?),
-                "--profile" => args.profile = Some(value(&mut raw, "--profile")?),
+                "--profile" => args.profile.push(value(&mut raw, "--profile")?),
+                "--change" => args
+                    .change
+                    .push(PathBuf::from(value(&mut raw, "--change")?)),
+                "--assume-profile" => {
+                    args.assume_profile = Some(value(&mut raw, "--assume-profile")?)
+                }
                 "--rule" => args.rule = Some(value(&mut raw, "--rule")?),
                 "--limit" => {
                     let v = value(&mut raw, "--limit")?;
@@ -507,33 +624,56 @@ impl Args {
                     format!("no vintage {key:?} in this build; it has {known:?}")
                 });
         }
-        let first = self
+        // Every input until one answers, not just the first: a set whose first file
+        // cannot be read still says which vintage it is, in the next file.
+        let files: Vec<PathBuf> = self
             .inputs
             .iter()
-            .flat_map(|p| cim_rs::instance_files(p))
-            .next();
-        if let Some(path) = first
-            && let Some(schema) = cim_rs::load::detect_file(&path)
-        {
+            .flat_map(cim_rs::instance_files)
+            .collect();
+        if let Some(schema) = cim_rs::load::detect_vintage(&files) {
             return Ok(schema);
         }
         VINTAGES.first().copied().ok_or_else(no_vintage)
     }
 
-    fn profile_id(&self, schema: &'static Schema) -> Result<ProfileId, String> {
-        let key = self.profile.as_deref().unwrap_or_default();
-        schema.profile_by_keyword(key).ok_or_else(|| {
-            let known: Vec<&str> = schema.profiles.iter().map(|p| p.keyword).collect();
-            format!("no profile {key:?} in {}; it has {known:?}", schema.vintage)
-        })
+    /// The profiles named with `--profile`, as one mask.
+    ///
+    /// A set rather than one, because an instance file routinely serves several: CGMES
+    /// 2.4.15 exchanges Equipment, Operation and ShortCircuit together and its published
+    /// shapes constrain that file as a whole, so `--profile EQ --profile OP --profile SC`
+    /// has to be expressible or the graph handed to a validator is not the file it
+    /// validates.
+    fn profile_mask(&self, schema: &'static Schema) -> Result<cim_rs::ProfileMask, String> {
+        let mut mask = 0;
+        for key in &self.profile {
+            mask |= profile_by_keyword(schema, key)?.mask();
+        }
+        Ok(mask)
     }
 
-    fn read_options(&self) -> ReadOptions {
-        if self.strict {
+    /// The keywords named with `--profile`, joined as a file name.
+    fn profile_label(&self, schema: &'static Schema) -> Result<String, String> {
+        let mut parts = Vec::new();
+        for key in &self.profile {
+            parts.push(schema.profile(profile_by_keyword(schema, key)?).keyword);
+        }
+        Ok(parts.join("_"))
+    }
+
+    fn read_options(&self, schema: &'static Schema) -> Result<ReadOptions, String> {
+        let mut o = if self.strict {
             ReadOptions::strict()
         } else {
             ReadOptions::lenient()
+        };
+        // A file with no `md:FullModel` attributes its values to nothing, which is what
+        // makes it unexportable as a file set. Naming the profile is the answer the
+        // library already had and the tool did not expose.
+        if let Some(keyword) = &self.assume_profile {
+            o.assume_profile = Some(profile_by_keyword(schema, keyword)?);
         }
+        Ok(o)
     }
 
     fn out_dir(&self) -> Result<PathBuf, String> {
@@ -551,14 +691,14 @@ impl Args {
         let files: Vec<PathBuf> = self
             .inputs
             .iter()
-            .flat_map(|p| cim_rs::instance_files(p))
+            .flat_map(cim_rs::instance_files)
             .collect();
         if files.is_empty() {
             return Err("no CIM/XML or zip inputs found".to_owned());
         }
         let mut ds = Dataset::new(schema);
         let report = ds
-            .load_files(&files, &self.read_options())
+            .load_files(&files, &self.read_options(schema)?)
             .map_err(|e| e.to_string())?;
         Ok((ds, report.report))
     }

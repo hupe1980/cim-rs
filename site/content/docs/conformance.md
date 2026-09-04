@@ -34,12 +34,13 @@ present:
 | **Re-export** | All 361 files, class for class and `rdf:ID`/`rdf:about` for `rdf:ID`/`rdf:about` |
 | **Well-formedness** | Every written document re-parsed with namespace resolution, duplicate-attribute detection and XML 1.0's `Char` production |
 | **RDF export** | 1.67M triples over the corpus, whole-model and per profile, against the N-Triples grammar |
-| **SHACL** | Every profile *that carries data*, in every published model set, against ENTSO-E's own shapes (`pyshacl`, in CI). A profile a model says nothing about gets no graph and is reported as `no data`; a run in which every profile was skipped fails |
+| **SHACL** | Every CGMES 3.0 profile *that carries data*, in every published model set, against ENTSO-E's own shapes (`pyshacl`, in CI). A profile a model says nothing about gets no graph and is reported as `no data`; a run in which every profile was skipped fails. CGMES 2.4.15 runs too and validates nothing — see below |
 | **Round-trip** | Every conformity model, by profile and as its original file set — no value lost |
 | **Difference models** | Read, applied and written back on both vintages, class replacement included |
 | **Computed differences** | A change set derived from two model states, applied, and checked to reproduce the target |
 | **Validation** | The whole corpus, with the findings pinned so a new one fails the build |
 | **Merge conflicts** | Pinned by location — every model set agrees with itself except the two 24-hour time-series directories |
+| **Quality-check corpus** | ENTSO-E's 100 QoCDC model sets — real TSO exports, conformant and deliberately not — all read, the vintage detected for each, and the three files that are broken on purpose named rather than fatal |
 | **Robustness** | Every truncation, 1,631 single-byte corruptions and every region deletion: no panic |
 | **Malformed input** | Markup nested in a value stays out of it; objects with no identifier stay distinct; absolute-IRI references resolve; a broken document's report is bounded and says where it stopped |
 | **Assembly** | A model merged from datasets built separately has the same content identifier as the same files loaded in sequence |
@@ -50,12 +51,23 @@ present:
 | **Documentation links** | Every `#`-anchor in the README and the design document resolves to a heading actually in it; `zola build` fails on a broken link between site pages |
 | **Cross-validation** | PowSyBl (Java) builds the identical network from a re-export as from the published files — every equipment count, both bus views, and a SHA-256 over every identifier — on four assembled CGMES 3.0 configurations and the CGMES 2.4.15 MicroGrid archive; rdflib (Python) parses the RDF export as a graph |
 | **Identifier text** | Every re-exported file's `rdf:ID`/`rdf:about` values compared letter for letter with its input — what the class-and-style census cannot see |
+| **Value text** | Every value in a re-exported model set compared text for text with its input — 951,340 of them, on both vintages. What the class census, the identifier census and the model round-trip are all structurally blind to: they compare parsed numbers, and `2.62637E-05` and `0.0000262637` are the same `f64` on both sides |
 | **Streams** | `cim diff` run both redirected and with `--out`, and the two compared byte for byte: where a command's result is a document, the document is the whole of stdout |
 | **Portability** | The library built for `wasm32-unknown-unknown` — no filesystem, no C dependency — so "usable from WASM" is a build rather than a claim |
 | **Vintage detection** | Both corpora read with the vintage taken from the documents; a mismatch reported as `CIM0021` at the root element, and neither corpus produces one when correctly paired |
 
-221 tests in total. Corpus-backed tests skip cleanly when the standards artifacts are
+242 tests in total. Corpus-backed tests skip cleanly when the standards artifacts are
 absent, so a fresh clone is green.
+
+### CGMES 2.4.15 cannot be SHACL-validated
+
+**Every one of the ten shapes files ENTSO-E publishes for CGMES 2.4.15 is invalid SHACL**:
+nine carry property shapes with two `sh:path` values — 46 in `EquipmentProfile.ttl` — and
+the tenth has a constraint with two `sh:in`. A conforming engine refuses to load them, so
+there is nothing to validate against. The CGMES 3.0 shapes have no such defect.
+
+`cargo xtask shacl --vintage cgmes2` runs in CI anyway and pins the unusable set, so the day
+one of those files is fixed the build says so.
 
 ## The check that is not ours
 
@@ -82,21 +94,10 @@ pinned containers:
   [the RDF page](@/docs/rdf.md) makes, and nothing else here would notice it silently
   reverting to plain strings.
 
-It demonstrably fails when it should. Removing one `cim:Breaker` from a published equipment
-file changes the digest completely, the switch count from 28 to 27, and the bus count from
-14 to **15** — the switch had been holding two buses together. That a count moved *upward*
-is why the digest is there.
-
-### Assertions must be exactly true
-
-PowSyBl names a tie line by joining its two halves' mRIDs in *encounter* order, which this
-crate's deterministic mRID ordering flips while the network stays identical — so the harness
-compares that pair unordered. And "no class appears both named and blank" fires on the
-published 2.4.15 MicroGrid, where 43 `CurrentLimit`s are identified by
-`_88240efd-b544-4131-bc99-e6b77d4bac881`: a UUID with a digit appended, which has no
-`urn:uuid:` form and is correctly left blank rather than given an invented name. A
-cross-validation's first job is to be believable, so both assertions were dropped in favour
-of comparing what is actually invariant.
+It demonstrably fails when it should: removing one `cim:Breaker` from a published equipment
+file changes the digest, drops the switch count from 28 to 27 and *raises* the bus count from
+14 to 15, the switch having held two buses together. A count that moves upward is why the
+digest is there and not only the counts.
 
 ## How the layers differ
 
@@ -105,7 +106,12 @@ are several:
 
 * **Round-trip on the model** proves no *value* was lost. It cannot see the document.
 * **A per-file element census** — how many objects of each class, identified which way —
-  proves the *document* was reproduced. It cannot see whether the document is valid.
+  proves the *document* was reproduced. It cannot see the text of an identifier or of a
+  value, and it cannot see whether the document is valid.
+* **An identifier census and a value census**, comparing both letter for letter against the
+  input, close exactly that. Each was added after the layer above it passed while the
+  output differed: mixed-case identifiers were being rewritten, and 8,623 numbers in the
+  published corpus were being reformatted.
 * **A conforming XML parser** proves the output is a document at all — namespaces resolved,
   no duplicate attribute, every character inside XML 1.0's `Char` production.
 * **A real SHACL engine** proves the RDF export is something the wider ecosystem accepts.
@@ -141,6 +147,9 @@ various reasons."* Three of those deviations are load-bearing and are handled ex
 * GUI and diagram rendering — DL and GL data are exposed; drawing is a consumer concern.
 * IEC 62325 market profiles and 61968 message envelopes — the generator treats a profile as
   data, so these can be added without architectural change.
+* **Bindings for other languages.** The library is `wasm32`-clean with one mandatory
+  dependency precisely so a binding *can* be built on it; shipping and maintaining a Python
+  wheel or an npm package is a separate product with its own incumbents.
 
 ## Licensing
 
@@ -160,7 +169,7 @@ are a local and CI test corpus only, never redistributed with the crate.
 - [IEC 61970:2026 SER — the series package, still shipping 61970-501:2006](https://webstore.iec.ch/en/publication/61167)
 - [CIM18 / Ed.7 development status — WG13 release notes](https://utf13-reports.ucaiug.io/18v03-18v04/CIM18v04_ReleaseNotes.pdf)
 - [IEC TS 61970-600-1:2021 (CGMES 3.0)](https://webstore.iec.ch/en/publication/63866) · [ENTSO-E CGMES library](https://www.entsoe.eu/data/cim/cim-for-grid-models-exchange/)
-- [ENTSO-E application-profiles-library (RDFS + SHACL, CGMES + NC)](https://github.com/entsoe/application-profiles-library) · [ENTSO-E RDF-Syntax User Guide v1.1.0 (2024-04-04)](https://eepublicdownloads.entsoe.eu/clean-documents/CIM_documents/Grid_Model_CIM/RDF-SyntaxUserGuide_v_1-1-0.pdf)
+- [ENTSO-E application-profiles-library (RDFS + SHACL, CGMES + NC)](https://github.com/entsoe/application-profiles-library) · [ENTSO-E RDF-Syntax User Guide v1.1.0](https://eepublicdownloads.entsoe.eu/clean-documents/CIM_documents/Grid_Model_CIM/RDF-SyntaxUserGuide_v_1-1-0.pdf) — `cargo xtask fetch-specs` downloads this one; §4 is the source for the `rdf:ID`/`rdf:about` rule (which cites rule MVAL5 of IEC 61970-600-1:2021), for datatypes not being exchanged, and for engineering notation carrying precision
 - [CIMTool release notes — 61970-501 Ed.2 draft RDFS, CIM18 domain types](https://cimtool.ucaiug.io/release-notes/)
 - [PowSyBl CIM-CGMES importer/exporter docs](https://powsybl.readthedocs.io/projects/powsybl-core/en/stable/grid_exchange_formats/cgmes/)
 - [sogno-platform/cimgen (Apache-2.0; C++, Go, Java, Python backends)](https://github.com/sogno-platform/cimgen) · [pycgmes (cimgen-generated Python)](https://github.com/alliander-opensource/pycgmes) · [cimoxide (early Rust CIM tooling)](https://github.com/m-mirz/cimoxide)

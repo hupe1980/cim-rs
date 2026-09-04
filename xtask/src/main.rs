@@ -10,7 +10,7 @@
 //!   cargo xtask codegen           regenerate sources in place
 //!   cargo xtask codegen --check   fail if the committed sources are stale
 //!   cargo xtask inspect           print a summary of the parsed schema
-//!   cargo xtask shacl [model]     validate the RDF export against ENTSO-E's shapes
+//!   cargo xtask shacl [model] [--vintage KEY]  validate the RDF export against the shapes
 //!   cargo xtask crossvalidate [model]  check our output against PowSyBl and rdflib
 
 mod crossvalidate;
@@ -30,7 +30,7 @@ usage: cargo xtask <command>
   fetch-specs [--clean]           download the standards artifacts into specs/
   codegen [--check]               regenerate src/generated from the RDFS vocabularies
   inspect                         summarise every parsed vintage
-  shacl [model-dir]               validate the RDF export against ENTSO-E's SHACL shapes
+  shacl [model] [--vintage KEY]   validate the RDF export against ENTSO-E's SHACL shapes
   crossvalidate [model] [--vintage KEY]
                                   check our output against PowSyBl and rdflib (needs Docker)
 ";
@@ -67,7 +67,7 @@ fn main() -> Result<()> {
         "fetch-specs" => specs::fetch(&root(), flag("--clean")),
         "codegen" => codegen(flag("--check")),
         "inspect" => inspect(),
-        "shacl" => shacl::check(&root(), positional),
+        "shacl" => shacl::check(&root(), positional, value("--vintage").unwrap_or("cgmes3")),
         // `--vintage` picks which schema the export runs against; the reference
         // implementations detect the vintage from the files themselves.
         "crossvalidate" => {
