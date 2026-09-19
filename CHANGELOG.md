@@ -61,6 +61,9 @@ Each changes bytes this crate writes for input shapes the conformity models do n
   default branch, so adopting a newer tag is known to be a migration.
 - `cargo-semver-checks` runs on every tag against the published baseline, reporting rather
   than failing while a pre-1.0 minor bump permits every breaking change.
+- `tests/concepts.rs` skips when the internal notes are absent rather than when the
+  `concepts/` directory is: the fetched corpus now lives under that directory, so CI had one
+  that held no documents and the test failed there instead of skipping.
 - The fetched RDF-Syntax User Guide is v2.0.0 (CIM WG approved 2026-01-27); citations follow
   it.
 

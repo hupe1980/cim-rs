@@ -137,9 +137,11 @@ that every `#`-anchor resolves and that snippets name the library `cim_rs`.
 
 `tests/concepts.rs` will look like it tests nothing. It guards the maintainers' internal
 architecture notes, which live in a gitignored `concepts/` directory and are therefore
-absent from a clone and from CI — so it skips there, and runs on the only machine that can
-break them: contiguous `D`/`R` numbering, no dangling citation or link between the
-documents, and the counts their prose states matching the entries there are.
+absent from a clone and from CI — so it skips when *the notes* are absent, rather than when
+the directory is, since `fetch-specs` puts the standards corpus under the same directory. It
+runs on the only machine that can break them: contiguous `D`/`R` numbering, no dangling
+citation or link between the documents, and the counts their prose states matching the
+entries there are.
 
 Examples are four runnable programs, one task each; `build_model` needs no input at all:
 

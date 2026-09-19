@@ -1,8 +1,8 @@
 //! The internal architecture notes, checked for the mistakes prose cannot make loudly.
 //!
 //! `concepts/` is gitignored — it is internal, not published — so this test **skips when
-//! the directory is absent**, which is what CI and every consumer of the crate see. It
-//! runs on the machine that has the notes, which is the only machine that can break them.
+//! the notes are absent**, which is what CI and every consumer of the crate see. It runs on
+//! the machine that has them, which is the only machine that can break them.
 //!
 //! What it checks is the class of error that reads perfectly and is wrong:
 //!
@@ -26,7 +26,11 @@ use std::path::{Path, PathBuf};
 
 fn concepts() -> Option<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("concepts");
-    dir.is_dir().then_some(dir)
+    // The *notes*, not the directory: `cargo xtask fetch-specs` puts the standards corpus
+    // in `concepts/references/`, so the directory exists on every machine that fetched it
+    // — including CI, which has the corpus and not the notes. Asking whether the directory
+    // exists made this test fail there instead of skipping (D59).
+    dir.join("README.md").is_file().then_some(dir)
 }
 
 /// Every `*.md` in `concepts/`, as `(file name, text)`.
