@@ -44,7 +44,7 @@ fn archives() -> &'static [&'static str] {
 }
 
 fn corpus() -> Option<PathBuf> {
-    let dir = common::specs()?
+    let dir = common::references()?
         .join("test-models/qocdc-3.2.1")
         .join("QoCDC v3.2.1 test models");
     dir.is_dir().then_some(dir)
@@ -167,4 +167,229 @@ fn every_quality_check_model_set_is_read_and_none_of_them_is_fatal() {
         ],
         "the set of deliberately unreadable files changed"
     );
+}
+
+/// Every file of the quality corpus that reads cleanly is re-exported as the document it
+/// was.
+///
+/// The conformity models are what a *conforming* producer emits, and they turn out not to
+/// exercise two things real exports do constantly. This test is where both were found
+/// (D55, D56, D57):
+///
+/// * a boundary set introduces a node and says nothing else about it —
+///   `<cim:ConnectivityNode rdf:ID="_x"/>` with no property children — and selecting what
+///   to write by *content* dropped 512 of 591 of them from the file that introduced them,
+///   while the other file kept referring to them with `rdf:about`;
+/// * a real header under-declares its profiles, naming only `EquipmentCore/3/1` while
+///   carrying `LoadArea`, which lives in Equipment Operation — and the identity form then
+///   flipped to `rdf:about`, pointing at a definition no file in the set contains;
+/// * a real boundary file writes `rdf:ID="7d06eea0-…"` with no leading underscore, which
+///   is not an XML `NCName` and therefore not a usable `rdf:ID`. That one *is* repaired on
+///   write, because writing it back would be writing an invalid document — so what is
+///   asserted here is that the repair was **reported**, not that it did not happen.
+///
+/// Sets that do not read cleanly are skipped rather than judged: QoCDC breaks files on
+/// purpose, and a document this crate could not fully read is not evidence about how it
+/// writes.
+#[test]
+fn every_readable_quality_check_file_re_exports_as_the_document_it_was() {
+    let Some(corpus) = corpus() else {
+        eprintln!("skipping: QoCDC corpus not present (cargo xtask fetch-specs)");
+        return;
+    };
+    let work = std::env::temp_dir().join(format!("cim-qocdc-rt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).unwrap();
+    for name in QUICK {
+        let file = std::fs::File::open(corpus.join(name)).unwrap();
+        zip::ZipArchive::new(std::io::BufReader::new(file))
+            .unwrap()
+            .extract(&work)
+            .unwrap();
+    }
+    let out = std::env::temp_dir().join(format!("cim-qocdc-rt-out-{}", std::process::id()));
+
+    let (mut sets, mut files) = (0usize, 0usize);
+    let mut problems: Vec<String> = Vec::new();
+    let mut repaired = 0usize;
+
+    for dir in model_sets(&work) {
+        let rel = dir.strip_prefix(&work).unwrap().display().to_string();
+        let inputs = cim_rs::instance_files(&dir);
+        let Some(schema) = cim_rs::load::detect_vintage(&inputs) else {
+            continue;
+        };
+        let mut ds = Dataset::new(schema);
+        let Ok(report) = ds.load_files(&inputs, &ReadOptions::lenient()) else {
+            continue;
+        };
+        // A set that did not read cleanly says nothing about how this crate writes.
+        if report.report.iter().any(|d| d.severity == Severity::Error)
+            || !ds.merge_conflicts().is_empty()
+        {
+            continue;
+        }
+        // Files whose identifiers this crate had to repair on the way in: the input is not
+        // writable as it stands, so the output is *supposed* to differ (D56).
+        let repaired_files: std::collections::BTreeSet<String> = report
+            .report
+            .iter()
+            .filter(|d| d.rule == Rule::NonConformingMrid)
+            .filter_map(|d| d.source.clone())
+            .collect();
+        repaired += repaired_files.len();
+
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        let saved = ds.save_as_loaded(&out).unwrap();
+        sets += 1;
+
+        for original in &inputs {
+            if original
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+            {
+                continue;
+            }
+            let name = original.file_name().unwrap().to_string_lossy().into_owned();
+            let Some(written) = saved
+                .written
+                .iter()
+                .find(|p| p.file_name().map(|n| n.to_string_lossy()) == Some(name.as_str().into()))
+            else {
+                continue;
+            };
+            let (Ok(src), Ok(dst)) = (
+                std::fs::read_to_string(original),
+                std::fs::read_to_string(written),
+            ) else {
+                continue;
+            };
+            files += 1;
+            common::assert_well_formed(&format!("{rel}/{name}"), &dst);
+
+            let (before, after) = (common::element_census(&src), common::element_census(&dst));
+            if before != after {
+                problems.push(format!(
+                    "{rel}/{name}: {}",
+                    common::census_diff(&before, &after)
+                ));
+            }
+            let drift = common::value_census_diff(
+                &common::value_census(&src),
+                &common::value_census(&dst),
+                3,
+            );
+            if !drift.is_empty() {
+                problems.push(format!("{rel}/{name}: values {}", drift.join(" | ")));
+            }
+            if !repaired_files.contains(&name) {
+                let (ib, ia) = (
+                    common::identifier_census(&src),
+                    common::identifier_census(&dst),
+                );
+                if ib != ia {
+                    problems.push(format!(
+                        "{rel}/{name}: identifiers lost {:?} gained {:?}",
+                        ib.difference(&ia).take(3).collect::<Vec<_>>(),
+                        ia.difference(&ib).take(3).collect::<Vec<_>>()
+                    ));
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&work);
+    let _ = std::fs::remove_dir_all(&out);
+
+    println!("quality corpus re-export: {sets} model sets, {files} files compared");
+    assert!(
+        problems.is_empty(),
+        "{} real exports did not come back as themselves:\n  {}",
+        problems.len(),
+        problems.join("\n  ")
+    );
+    assert!(files > 200, "only {files} files compared");
+    // Pinned rather than tolerated: one published boundary file writes an `rdf:ID` that is
+    // not an `NCName`. If that stops happening the exclusion above is dead and should go.
+    assert!(
+        repaired > 0,
+        "no identifier repair was reported — the exclusion above now hides nothing, \
+         or the diagnostic stopped firing"
+    );
+}
+
+/// The other two questions this corpus can answer: does a real export differ from itself,
+/// and is its RDF projection interchange?
+///
+/// Reading found two defects (D43, D44) and comparing documents found three more (D55–D57).
+/// A corpus answers the question you ask it, so these are the remaining ones this crate has
+/// gates for — and they matter most here because QoCDC is overwhelmingly CGMES 2.4.15, the
+/// vintage whose RDF export no SHACL engine can check: every one of its published shapes
+/// files is invalid SHACL (D51), so the N-Triples grammar over real 2.4.15 data is the
+/// strongest structural evidence available for that half of the crate.
+#[test]
+fn the_quality_corpus_does_not_differ_from_itself_and_exports_as_interchange() {
+    let Some(corpus) = corpus() else {
+        eprintln!("skipping: QoCDC corpus not present (cargo xtask fetch-specs)");
+        return;
+    };
+    let work = std::env::temp_dir().join(format!("cim-qocdc-rdf-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).unwrap();
+    for name in QUICK {
+        let file = std::fs::File::open(corpus.join(name)).unwrap();
+        zip::ZipArchive::new(std::io::BufReader::new(file))
+            .unwrap()
+            .extract(&work)
+            .unwrap();
+    }
+
+    let (mut sets, mut triples) = (0usize, 0usize);
+    let mut problems: Vec<String> = Vec::new();
+
+    for dir in model_sets(&work) {
+        let rel = dir.strip_prefix(&work).unwrap().display().to_string();
+        let inputs = cim_rs::instance_files(&dir);
+        let Some(schema) = cim_rs::load::detect_vintage(&inputs) else {
+            continue;
+        };
+        let mut ds = Dataset::new(schema);
+        let Ok(report) = ds.load_files(&inputs, &ReadOptions::lenient()) else {
+            continue;
+        };
+        if report.report.iter().any(|d| d.severity == Severity::Error)
+            || !ds.merge_conflicts().is_empty()
+        {
+            continue;
+        }
+        sets += 1;
+
+        // A model differs from itself by nothing — the identity law of the difference
+        // machinery, over inputs nobody designed for it.
+        if !ds.difference_to(&ds, &Default::default()).is_empty() {
+            problems.push(format!("{rel}: a model differs from itself"));
+        }
+
+        let mut buf = Vec::new();
+        if cim_rs::rdf::write(
+            &ds,
+            &mut buf,
+            &cim_rs::RdfOptions::new(cim_rs::Syntax::NTriples),
+        )
+        .is_err()
+        {
+            problems.push(format!("{rel}: RDF export failed"));
+            continue;
+        }
+        match common::check_ntriples(&String::from_utf8(buf).unwrap()) {
+            Ok(n) => triples += n,
+            Err(e) => problems.push(format!("{rel}: {e}")),
+        }
+    }
+    let _ = std::fs::remove_dir_all(&work);
+
+    println!("quality corpus: {sets} model sets, {triples} triples exported");
+    assert!(problems.is_empty(), "{}", problems.join("\n  "));
+    assert!(sets > 80, "only {sets} model sets qualified");
+    assert!(triples > 200_000, "only {triples} triples exported");
 }

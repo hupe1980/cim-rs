@@ -28,7 +28,7 @@ pub struct Vintage {
     /// Module name, e.g. `cgmes3`.
     pub key: &'static str,
     pub title: &'static str,
-    /// Directory holding the RDFS files, relative to `specs/`.
+    /// Directory holding the RDFS files, relative to `concepts/references/`.
     pub rdfs_dir: &'static str,
     pub profiles: &'static [ProfileSpec],
 }
@@ -82,10 +82,18 @@ const fn p(keyword: &'static str, file: &'static str) -> ProfileSpec {
 /// * Equipment, Operation and ShortCircuit share one vocabulary file. They are separated
 ///   by the `Operation` and `ShortCircuit` stereotypes the file already carries, which is
 ///   exactly the split CGMES 3.0 later made into separate files.
+///
+/// The vocabularies are read from ENTSO-E's own `CGMES2415_Components_2020` archive rather
+/// than from the profiles library, which used to carry a copy under
+/// `CGMES/PastReleases/v2-4/` and has since **deleted that tree from its main branch**.
+/// The two are the same thirteen files, identical once CRLF line endings are normalised,
+/// and generating from either produces byte-identical sources — verified by
+/// `codegen --check` before the switch. A pin that is the only surviving copy of its
+/// source is not a pin, it is a fork nobody has noticed yet (D53).
 const CGMES2: Vintage = Vintage {
     key: "cgmes2",
     title: "CGMES 2.4.15",
-    rdfs_dir: "application-profiles-library/CGMES/PastReleases/v2-4/Original/RDFS",
+    rdfs_dir: "cgmes-2.4.15/components-2020/CGMES2415_Components_2020/RDFS",
     profiles: &[
         ProfileSpec {
             keyword: "EQ",

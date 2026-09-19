@@ -112,7 +112,13 @@ conformity models.
   attributes the data does not supply.
 * **`rdf:ID` versus `rdf:about` is a property of the class within the profile**, not of the
   file. The RDFS says which is which; guessing from the profile keyword rewrote 49,255
-  identifiers in one published file.
+  identifiers in one published file. Where no profile in the write set declares the class at
+  all, the file carrying the object introduces it: `rdf:about` would name a definition no
+  file contains.
+* **A file that introduces an object without describing it still introduces it.** Boundary
+  sets write `<cim:ConnectivityNode rdf:ID="_x"/>` and leave the attributes to another file.
+  Which file an object came from is recorded as it is read, so an export reproduces that
+  rather than inferring it from which values happen to land where.
 * **A number's spelling is information.** Published models write `2.62637E-05`, `0e+000`
   and `250.000000`; storing an `f64` and re-rendering it hands back `0.0000262637`, `0` and
   `250` — the same model as a different file, which is what the receiver diffs. Each value
@@ -277,7 +283,8 @@ Checked against the published models on every `cargo test` with the corpus prese
 * both conformity corpora read with zero errors, and all 100 of ENTSO-E's QoCDC
   quality-check model sets — real TSO exports, conformant and deliberately not;
 * per-file re-export compared class for class, identifier for identifier and **value text
-  for value text**;
+  for value text**, over the conformity corpora and over the 95 quality-check sets that read
+  cleanly;
 * output judged by tools that are not ours: a conforming XML parser, the N-Triples grammar,
   ENTSO-E's SHACL shapes, and PowSyBl (Java) and rdflib (Python) in pinned containers;
 * semantic round-trip, difference models both ways, pinned validation findings, and a
@@ -285,21 +292,23 @@ Checked against the published models on every `cargo test` with the corpus prese
 * a `wasm32-unknown-unknown` build, so "pure Rust, no C dependencies" is a build rather than
   a claim.
 
-242 tests; corpus-backed tests skip cleanly on a fresh clone. [The full record][conformance]
+249 tests; corpus-backed tests skip cleanly on a fresh clone. [The full record][conformance]
 
 ## 🛠️ Development
 
-The standards artifacts are **not vendored**; `specs/` is gitignored and fetched, and
-generated sources are committed. Every repository task is a subcommand of one program:
+The standards artifacts are **not vendored**; `concepts/references/` is gitignored and
+fetched, and generated sources are committed. Every repository task is a subcommand of one
+program:
 
 ```bash
-cargo xtask fetch-specs         # ENTSO-E RDFS + SHACL + conformity models -> specs/
+cargo xtask fetch-specs         # ENTSO-E RDFS + SHACL + conformity models -> concepts/references/
 cargo xtask codegen             # RDFS -> src/generated/
 cargo test --workspace --all-features
 ```
 
-Repository layout, adding a schema vintage, the `specs/` corpus and its licences, the
-interop harnesses and the release process are in [CONTRIBUTING.md](CONTRIBUTING.md).
+Repository layout, adding a schema vintage, the `concepts/references/` corpus and its
+licences, the interop harnesses and the release process are in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 Release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ## ⚖️ Licensing and attribution

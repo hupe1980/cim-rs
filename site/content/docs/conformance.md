@@ -40,7 +40,7 @@ present:
 | **Computed differences** | A change set derived from two model states, applied, and checked to reproduce the target |
 | **Validation** | The whole corpus, with the findings pinned so a new one fails the build |
 | **Merge conflicts** | Pinned by location — every model set agrees with itself except the two 24-hour time-series directories |
-| **Quality-check corpus** | ENTSO-E's 100 QoCDC model sets — real TSO exports, conformant and deliberately not — all read, the vintage detected for each, and the three files that are broken on purpose named rather than fatal |
+| **Quality-check corpus** | ENTSO-E's 100 QoCDC model sets — real TSO exports, conformant and deliberately not — all read, the vintage detected for each, and the three files that are broken on purpose named rather than fatal. The 95 sets that read cleanly are also re-exported and compared as documents: 225 files, class for class, identifier for identifier, value for value |
 | **Robustness** | Every truncation, 1,631 single-byte corruptions and every region deletion: no panic |
 | **Malformed input** | Markup nested in a value stays out of it; objects with no identifier stay distinct; absolute-IRI references resolve; a broken document's report is bounded and says where it stopped |
 | **Assembly** | A model merged from datasets built separately has the same content identifier as the same files loaded in sequence |
@@ -51,12 +51,12 @@ present:
 | **Documentation links** | Every `#`-anchor in the README and the design document resolves to a heading actually in it; `zola build` fails on a broken link between site pages |
 | **Cross-validation** | PowSyBl (Java) builds the identical network from a re-export as from the published files — every equipment count, both bus views, and a SHA-256 over every identifier — on four assembled CGMES 3.0 configurations and the CGMES 2.4.15 MicroGrid archive; rdflib (Python) parses the RDF export as a graph |
 | **Identifier text** | Every re-exported file's `rdf:ID`/`rdf:about` values compared letter for letter with its input — what the class-and-style census cannot see |
-| **Value text** | Every value in a re-exported model set compared text for text with its input — 951,340 of them, on both vintages. What the class census, the identifier census and the model round-trip are all structurally blind to: they compare parsed numbers, and `2.62637E-05` and `0.0000262637` are the same `f64` on both sides |
+| **Value text** | Re-exported values compared text for text with their input — 951,340 of them, over every CGMES 3.0 model set that does not contradict itself, and one CGMES 2.4.15 archive besides. What the class census, the identifier census and the model round-trip are all structurally blind to: they compare parsed numbers, and `2.62637E-05` and `0.0000262637` are the same `f64` on both sides |
 | **Streams** | `cim diff` run both redirected and with `--out`, and the two compared byte for byte: where a command's result is a document, the document is the whole of stdout |
 | **Portability** | The library built for `wasm32-unknown-unknown` — no filesystem, no C dependency — so "usable from WASM" is a build rather than a claim |
 | **Vintage detection** | Both corpora read with the vintage taken from the documents; a mismatch reported as `CIM0021` at the root element, and neither corpus produces one when correctly paired |
 
-242 tests in total. Corpus-backed tests skip cleanly when the standards artifacts are
+249 tests in total. Corpus-backed tests skip cleanly when the standards artifacts are
 absent, so a fresh clone is green.
 
 ### CGMES 2.4.15 cannot be SHACL-validated
@@ -122,8 +122,10 @@ are several:
 ## Where cim-rs deviates deliberately
 
 The published vocabularies deviate from the standards they implement — ENTSO-E says so in
-the RDF-Syntax User Guide: *"current implementations deviate from these standards due to
-various reasons."* Three of those deviations are load-bearing and are handled explicitly:
+the RDF-Syntax User Guide §2.3: the schema *"exported for each of the profiles also
+deviates from W3C"*, and profiles generated since 2010 *"do not fully follow IEC 61970-501
+either, but the implementation has been industry-driven."* Real exports deviate too, and
+five of those deviations are load-bearing and are handled explicitly:
 
 1. **The `Description` stereotype is applied unevenly.** Steady State Hypothesis marks all
    45 classes it touches except `Equipment`, which it declares concrete as the generic
@@ -136,6 +138,16 @@ various reasons."* Three of those deviations are load-bearing and are handled ex
    boundary file writes `Terminal.ConnectivityNode`, which only Equipment declares. The
    value goes back where it came from — the data is evidence, the vocabulary is a claim
    about it — and the discrepancy is reported as `CIM0010` rather than silently re-filed.
+4. **A header under-declares its profiles.** A real Equipment file names only
+   `EquipmentCore/3/1` while carrying `LoadArea`, which lives in Equipment Operation. A
+   class the write set does not mention at all cannot be written as `rdf:about`: that
+   asserts some other file defines the object, and none does. The file carrying it
+   introduces it, which is what 61970-552 means by a first serialization.
+5. **An `rdf:ID` that is not an XML `NCName`.** A published boundary file writes
+   `rdf:ID="7d06eea0-…"` with no leading underscore — invalid RDF/XML, since a name cannot
+   begin with a digit. Writing it back unchanged would emit an invalid document, so it is
+   repaired, and because the output then differs from the input the repair is **always**
+   reported as `CIM0004`, whether or not identifier-form reporting was asked for.
 
 ## Not in scope
 
@@ -169,7 +181,7 @@ are a local and CI test corpus only, never redistributed with the crate.
 - [IEC 61970:2026 SER — the series package, still shipping 61970-501:2006](https://webstore.iec.ch/en/publication/61167)
 - [CIM18 / Ed.7 development status — WG13 release notes](https://utf13-reports.ucaiug.io/18v03-18v04/CIM18v04_ReleaseNotes.pdf)
 - [IEC TS 61970-600-1:2021 (CGMES 3.0)](https://webstore.iec.ch/en/publication/63866) · [ENTSO-E CGMES library](https://www.entsoe.eu/data/cim/cim-for-grid-models-exchange/)
-- [ENTSO-E application-profiles-library (RDFS + SHACL, CGMES + NC)](https://github.com/entsoe/application-profiles-library) · [ENTSO-E RDF-Syntax User Guide v1.1.0](https://eepublicdownloads.entsoe.eu/clean-documents/CIM_documents/Grid_Model_CIM/RDF-SyntaxUserGuide_v_1-1-0.pdf) — `cargo xtask fetch-specs` downloads this one; §4 is the source for the `rdf:ID`/`rdf:about` rule (which cites rule MVAL5 of IEC 61970-600-1:2021), for datatypes not being exchanged, and for engineering notation carrying precision
+- [ENTSO-E application-profiles-library (RDFS + SHACL, CGMES + NC)](https://github.com/entsoe/application-profiles-library) · [ENTSO-E RDF-Syntax User Guide v2.0.0](https://eepublicdownloads.entsoe.eu/clean-documents/CIM_documents/Grid_Model_CIM/RDF-SyntaxUserGuide_v_2-0-0.pdf) — `cargo xtask fetch-specs` downloads this one; §2.2.1.2 is the source for the `rdf:ID`/`rdf:about` rule (which cites rule MVAL5 of IEC 61970-600-1:2021) and §2.2.1.1 for datatypes not being exchanged and for engineering notation carrying precision
 - [CIMTool release notes — 61970-501 Ed.2 draft RDFS, CIM18 domain types](https://cimtool.ucaiug.io/release-notes/)
 - [PowSyBl CIM-CGMES importer/exporter docs](https://powsybl.readthedocs.io/projects/powsybl-core/en/stable/grid_exchange_formats/cgmes/)
 - [sogno-platform/cimgen (Apache-2.0; C++, Go, Java, Python backends)](https://github.com/sogno-platform/cimgen) · [pycgmes (cimgen-generated Python)](https://github.com/alliander-opensource/pycgmes) · [cimoxide (early Rust CIM tooling)](https://github.com/m-mirz/cimoxide)

@@ -145,7 +145,7 @@ pub fn parse_bytes(bytes: &[u8]) -> Result<Document> {
             }
             Event::Text(t) => {
                 if let Some((_, buf)) = pending.as_mut() {
-                    buf.push_str(&t.xml10_content()?);
+                    buf.push_str(&t.xml10_content());
                 }
             }
             // A reference is its own event, so dropping it would silently delete the
@@ -156,8 +156,8 @@ pub fn parse_bytes(bytes: &[u8]) -> Result<Document> {
                     match r.resolve_char_ref() {
                         Ok(Some(c)) => buf.push(c),
                         Ok(None) | Err(_) => {
-                            let name = r.decode()?;
-                            match quick_xml::escape::resolve_predefined_entity(&name) {
+                            let name = r.as_ref();
+                            match quick_xml::escape::resolve_predefined_entity(name) {
                                 Some(text) => buf.push_str(text),
                                 None => buf.push_str(&format!("&{name};")),
                             }
@@ -167,7 +167,7 @@ pub fn parse_bytes(bytes: &[u8]) -> Result<Document> {
             }
             Event::CData(t) => {
                 if let Some((_, buf)) = pending.as_mut() {
-                    buf.push_str(&String::from_utf8_lossy(&t));
+                    buf.push_str(&t);
                 }
             }
             Event::End(e) => {
@@ -210,8 +210,8 @@ fn decode(bytes: &[u8]) -> Result<String> {
     }
 }
 
-fn qname(name: &[u8]) -> String {
-    String::from_utf8_lossy(name).into_owned()
+fn qname(name: &str) -> String {
+    name.to_owned()
 }
 
 fn collect_namespaces(
@@ -221,7 +221,7 @@ fn collect_namespaces(
 ) -> Result<()> {
     for attr in e.attributes().with_checks(false) {
         let attr = attr?;
-        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        let key = attr.key.as_ref().to_owned();
         let val = attr
             .normalized_value(quick_xml::XmlVersion::Explicit1_0)?
             .into_owned();
@@ -256,7 +256,7 @@ fn attr_value(
 ) -> Result<Option<String>> {
     for attr in e.attributes().with_checks(false) {
         let attr = attr?;
-        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        let key = attr.key.as_ref();
         // Attribute names are QNames too; `rdf:about` must expand to the RDF namespace.
         if let Some((prefix, local)) = key.split_once(':')
             && local == want

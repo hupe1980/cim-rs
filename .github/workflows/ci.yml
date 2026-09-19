@@ -11,7 +11,7 @@ env:
 
 jobs:
   # The published crate must build and pass its own tests without the standards
-  # artifacts present, since a fresh clone has no `specs/` directory.
+  # artifacts present, since a fresh clone has no `concepts/references/` directory.
   build:
     name: build & unit tests
     runs-on: ubuntu-latest
@@ -59,7 +59,7 @@ jobs:
           # leaving them out would make the tarball's own test suite unrunnable. The
           # site's presentation is not shipped, and neither is anything else.
           ! cargo package --allow-dirty --no-verify --list \
-            | grep -E '^(xtask|fuzz|specs|\.github|\.cargo)/|^site/(templates|static|public)/|^site/config'
+            | grep -E '^(xtask|fuzz|concepts|\.github|\.cargo)/|^site/(templates|static|public)/|^site/config'
 
   # Each vintage must stand alone: a program targeting CGMES 3.0 should not have to
   # compile the 2.4.15 tables, and vice versa.
@@ -110,7 +110,7 @@ jobs:
       - name: Cache downloaded standards artifacts
         uses: actions/cache@v4
         with:
-          path: specs
+          path: concepts/references
           key: specs-${{ hashFiles('xtask/src/specs.rs') }}
       - name: Fetch standards artifacts
         run: cargo xtask fetch-specs
@@ -127,7 +127,7 @@ jobs:
       # stdout, which must then carry the document and nothing else.
       - name: Command line against a published model set
         run: |
-          root=specs/test-models/cas-3.0.3/CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0
+          root=concepts/references/test-models/cas-3.0.3/CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0
           model="$root/MicroGrid/MicroGrid-Type1/MicroGrid-Type1-NL-MAS"
           base="$root/MicroGrid/MicroGid-BaseCase/MicroGrid-NL-MAS"
           cargo build --release --bin cim --features cli,cgmes3,cgmes2
@@ -143,7 +143,7 @@ jobs:
       # The examples are the library's front door, so they run against real models too.
       - name: Examples against a published model set
         run: |
-          root=specs/test-models/cas-3.0.3/CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0
+          root=concepts/references/test-models/cas-3.0.3/CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0
           model="$root/MicroGrid/MicroGrid-Type1/MicroGrid-Type1-NL-MAS"
           cargo run --release --example inspect --features cgmes3 -- "$model" > /dev/null
           cargo run --release --example to_rdf --features cgmes3 -- "$model" EQ > eq.ttl
@@ -169,7 +169,7 @@ jobs:
       - name: Cache downloaded standards artifacts
         uses: actions/cache@v4
         with:
-          path: specs
+          path: concepts/references
           key: specs-${{ hashFiles('xtask/src/specs.rs') }}
       - name: Fetch standards artifacts
         run: cargo xtask fetch-specs
@@ -177,7 +177,7 @@ jobs:
         run: pip install pyshacl
       - name: Validate every profile of the published conformity models
         run: |
-          root=specs/test-models/cas-3.0.3/CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0
+          root=concepts/references/test-models/cas-3.0.3/CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0
           for model in FullGrid/FullGrid-Merged MiniGrid/MiniGrid-Merged \
                        MicroGrid/MicroGrid-Type1 PowerFlow/PowerFlow \
                        SmallGrid/SmallGrid-Merged Svedala/Svedala-Merged; do
@@ -211,7 +211,7 @@ jobs:
       - name: Cache downloaded standards artifacts
         uses: actions/cache@v4
         with:
-          path: specs
+          path: concepts/references
           key: specs-${{ hashFiles('xtask/src/specs.rs') }}
       - name: Fetch standards artifacts
         run: cargo xtask fetch-specs
@@ -224,7 +224,7 @@ jobs:
       # comparison vacuous rather than failing.
       - name: Cross-validate the assembled conformity models
         run: |
-          root=specs/test-models/cas-3.0.3/CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0
+          root=concepts/references/test-models/cas-3.0.3/CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0
           for model in MicroGrid/MicroGrid-Type1/MicroGrid-Type1-Merged \
                        MiniGrid/MiniGrid-Merged \
                        SmallGrid/SmallGrid-Merged \
@@ -238,7 +238,7 @@ jobs:
       # the mixed-case identifiers live that this check was what finally caught.
       - name: Cross-validate CGMES 2.4.15
         run: |
-          archive=specs/test-models/cas-2.0/MicroGrid/BaseCase_BC/CGMES_v2.4.15_MicroGridTestConfiguration_BC_Assembled_v2.zip
+          archive=concepts/references/test-models/cas-2.0/MicroGrid/BaseCase_BC/CGMES_v2.4.15_MicroGridTestConfiguration_BC_Assembled_v2.zip
           cargo xtask crossvalidate "$archive" --vintage cgmes2
 
   # Portability as a build rather than a claim — the kind of property one new dependency

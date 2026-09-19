@@ -6,11 +6,14 @@
 //! data based on the profile definitions") — but running SHACL is deliberately **not** this
 //! crate's job, so the proof that the output is usable has to come from a real engine.
 //!
-//! That engine is `pyshacl`, and it stays Python: there is no mature SHACL implementation
-//! in Rust, and writing one would be a second project rather than a feature of this one.
-//! What lives here is everything around it — selecting the shapes for each profile, driving
-//! the export, reading the validation report, and deciding which findings are the published
-//! models' own rather than ours.
+//! That engine is `pyshacl`, and it stays Python — not for want of a Rust one. rudof's
+//! implementation returns the same verdict on the *Simple* shape sets far faster, and does
+//! not evaluate the `sh:sparql` constraints the *Complex* sets are built from, without
+//! saying so: "no violations" for constraints nobody ran is a gate that cannot fail.
+//!
+//! What lives here is everything around the engine — selecting the shapes for each profile,
+//! driving the export, reading the validation report, and deciding which findings are the
+//! published models' own rather than ours.
 //!
 //! ```text
 //! python3 -m venv .venv && .venv/bin/pip install pyshacl
@@ -62,9 +65,9 @@ const VINTAGES: &[Vintage] = &[CGMES3, CGMES2];
 const CGMES3: Vintage = Vintage {
     key: "cgmes3",
     features: "cli,cgmes3",
-    shapes_dir: "specs/application-profiles-library/CGMES/CurrentRelease/SHACL/TTL",
+    shapes_dir: "concepts/references/application-profiles-library/CGMES/CurrentRelease/SHACL/TTL",
     header_shapes: "61970-552-Header-AP-Con-Simple-SHACL.ttl",
-    default_model: "specs/test-models/cas-3.0.3/\
+    default_model: "concepts/references/test-models/cas-3.0.3/\
         CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0/MicroGrid/MicroGrid-Type1",
     unusable_shapes: &[],
     shapes: &[
@@ -99,9 +102,9 @@ const CGMES3: Vintage = Vintage {
 const CGMES2: Vintage = Vintage {
     key: "cgmes2",
     features: "cli,cgmes2",
-    shapes_dir: "specs/application-profiles-library/CGMES/PastReleases/v2-4/Enchanced/SHACL",
+    shapes_dir: "concepts/references/application-profiles-library/CGMES/PastReleases/v2-4/Enchanced/SHACL",
     header_shapes: "FileHeaderProfile.ttl",
-    default_model: "specs/test-models/cas-2.0/MicroGrid/BaseCase_BC/\
+    default_model: "concepts/references/test-models/cas-2.0/MicroGrid/BaseCase_BC/\
         CGMES_v2.4.15_MicroGridTestConfiguration_BC_Assembled_v2.zip",
     // Nine of the ten published files carry property shapes with two `sh:path` values,
     // which SHACL forbids; only Steady State Hypothesis loads. This is ENTSO-E's artifact

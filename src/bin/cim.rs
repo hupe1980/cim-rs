@@ -59,6 +59,7 @@ options:
   --limit N         how many findings to list (default 20; 0 for all)
   -q, --quiet       less chatter
   -h, --help        this text
+  -V, --version     the version of this binary
 
 exit status: 0 clean, 1 the model has errors, 2 the command was wrong.
 ";
@@ -87,6 +88,12 @@ fn main() -> ExitCode {
 
 fn run(out: &mut dyn Write) -> Result<ExitCode, Fail> {
     let args = Args::parse(std::env::args().skip(1))?;
+    if args.version {
+        // The released binaries are built from the tag, so this is what says which release
+        // a downloaded `cim` came from.
+        writeln!(out, "cim {}", env!("CARGO_PKG_VERSION"))?;
+        return Ok(ExitCode::SUCCESS);
+    }
     if args.help {
         write!(out, "{USAGE}")?;
         return Ok(ExitCode::SUCCESS);
@@ -556,6 +563,7 @@ struct Args {
     strict: bool,
     quiet: bool,
     help: bool,
+    version: bool,
     limit: usize,
 }
 
@@ -573,6 +581,7 @@ impl Args {
         while let Some(a) = raw.next() {
             match a.as_str() {
                 "-h" | "--help" => args.help = true,
+                "-V" | "--version" => args.version = true,
                 "-q" | "--quiet" => args.quiet = true,
                 "--strict" => args.strict = true,
                 "--ntriples" => args.ntriples = true,

@@ -152,21 +152,16 @@ fn re_export_reproduces_the_text_of_every_value() {
     let mut checked_values = 0usize;
     let mut skipped = Vec::new();
 
-    for model in [
-        "MiniGrid/MiniGrid-Merged",
-        "SmallGrid/SmallGrid-Merged",
-        "MicroGrid/MicroGrid-Type1/MicroGrid-Type1-Merged",
-        "FullGrid/FullGrid-Merged",
-        "MicroGrid/MicroGrid-Type3/CGMs",
-        "MicroGrid/MicroGrid-Type3/IGMs",
-    ] {
-        let dir = root.join(model);
-        if !dir.is_dir() {
-            continue;
-        }
+    for dir in common::model_dirs(&root) {
+        let model = dir
+            .strip_prefix(&root)
+            .unwrap_or(&dir)
+            .display()
+            .to_string();
+        let model = model.as_str();
         let ds = Dataset::load_dir(SCHEMA, &dir).unwrap();
         if !ds.merge_conflicts().is_empty() {
-            skipped.push(model);
+            skipped.push(model.to_owned());
             continue;
         }
 
@@ -203,12 +198,16 @@ fn re_export_reproduces_the_text_of_every_value() {
         checked_models += 1;
     }
 
+    // Printed rather than only asserted: these are the numbers the documentation quotes,
+    // and a figure no command prints is a figure the next audit inherits instead of
+    // measuring (D54).
+    println!("value census: {checked_models} model sets, {checked_values} value texts");
     assert!(
-        checked_models >= 4,
+        checked_models >= 25,
         "only {checked_models} model sets compared"
     );
     assert!(
-        checked_values > 100_000,
+        checked_values > 900_000,
         "only {checked_values} values compared"
     );
     // Pinned, not tolerated: the one model set that legitimately cannot be reproduced is

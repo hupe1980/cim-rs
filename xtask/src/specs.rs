@@ -1,4 +1,4 @@
-//! Fetching the machine-readable CIM/CGMES standards artifacts into `specs/`.
+//! Fetching the machine-readable CIM/CGMES standards artifacts into `concepts/references/`.
 //!
 //! Only publicly licensed material is fetched:
 //!
@@ -29,6 +29,12 @@ use sha2::{Digest, Sha256};
 
 use crate::vintage;
 
+/// Where the fetched artifacts land, relative to the repository root.
+///
+/// They sit beside the architecture notes in `concepts/` as the references those
+/// notes cite: gitignored, owned by their publishers, never redistributed.
+pub const DIR: &str = "concepts/references";
+
 /// Pinned upstream ref for the ENTSO-E application profiles library.
 const APL_REPO: &str = "https://github.com/entsoe/application-profiles-library";
 const APL_TAG: &str = "v1.1.1";
@@ -43,7 +49,7 @@ enum Kind {
 
 struct Artifact {
     url: &'static str,
-    /// Destination under `specs/` — a directory for [`Kind::Zip`], a file path otherwise.
+    /// Destination under [`DIR`] — a directory for [`Kind::Zip`], a file path otherwise.
     dest: &'static str,
     kind: Kind,
     /// What the material is licensed under, recorded in the manifest.
@@ -86,10 +92,14 @@ const ARTIFACTS: &[Artifact] = &[
     },
     // Public ENTSO-E technical documents.
     Artifact {
-        // v1.1.0, which is the revision the documentation cites: a reader following a
-        // citation has to land on the document in `specs/`.
-        url: "https://eepublicdownloads.entsoe.eu/clean-documents/CIM_documents/Grid_Model_CIM/RDF-SyntaxUserGuide_v_1-1-0.pdf",
-        dest: "docs/RDF-SyntaxUserGuide_v1-1-0.pdf",
+        // v2.0.0 (CIM WG approved 2026-01-27), which is the revision the documentation
+        // cites: a reader following a citation has to land on the document this fetches,
+        // and citing a superseded revision is how a derived-source claim goes stale
+        // without anything failing (D41). It supersedes v1.1.0 and adds the chapters on
+        // cross-profile validation and on the tooling landscape that
+        // `concepts/MARKET_LANDSCAPE.md` reads.
+        url: "https://eepublicdownloads.entsoe.eu/clean-documents/CIM_documents/Grid_Model_CIM/RDF-SyntaxUserGuide_v_2-0-0.pdf",
+        dest: "docs/RDF-SyntaxUserGuide_v2-0-0.pdf",
         kind: Kind::File,
         license: "public ENTSO-E document",
     },
@@ -120,7 +130,7 @@ const ARTIFACTS: &[Artifact] = &[
 ];
 
 pub fn fetch(root: &Path, clean: bool) -> Result<()> {
-    let specs = root.join("specs");
+    let specs = root.join(DIR);
     if clean {
         println!("==> removing {}", specs.display());
         let _ = fs::remove_dir_all(&specs);
@@ -194,7 +204,59 @@ pub fn verify(specs: &Path) -> Result<()> {
         "==> verified   {} vintage(s), every vocabulary file present",
         vintage::VINTAGES.len()
     );
+    check_upstream_layout(specs);
     Ok(())
+}
+
+/// Note when a path the generator reads no longer exists on the library's default branch.
+///
+/// A tag keeps resolving after upstream deletes what it pointed at, so the fetch stays green
+/// while the source of truth moves out from under it (D53). A note rather than an error:
+/// upstream reorganising is not a reason for a build to fail, and without network there is
+/// nothing to say.
+fn check_upstream_layout(specs: &Path) {
+    let repo = specs.join("application-profiles-library");
+    if !repo.join(".git").is_dir() {
+        return;
+    }
+    // The paths this repository actually reads from the library, rather than all of it.
+    let needed: Vec<&str> = vintage::VINTAGES
+        .iter()
+        .map(|v| v.rdfs_dir)
+        .filter_map(|d| d.strip_prefix("application-profiles-library/"))
+        .collect();
+    if needed.is_empty() {
+        return;
+    }
+    let fetched = std::process::Command::new("git")
+        .args(["fetch", "--depth", "1", "origin", "HEAD"])
+        .current_dir(&repo)
+        .output();
+    let Ok(out) = fetched else { return };
+    if !out.status.success() {
+        return;
+    }
+    let mut moved: Vec<&str> = Vec::new();
+    for path in &needed {
+        let probe = std::process::Command::new("git")
+            .args(["cat-file", "-e", &format!("FETCH_HEAD:{path}")])
+            .current_dir(&repo)
+            .output();
+        if probe.is_ok_and(|o| !o.status.success()) {
+            moved.push(path);
+        }
+    }
+    if !moved.is_empty() {
+        println!(
+            "==> note       {APL_TAG} is pinned, and {} path(s) it provides no longer \
+             exist on the library's default branch:",
+            moved.len()
+        );
+        for p in moved {
+            println!("                 {p}");
+        }
+        println!("               adopting a newer tag is a path migration, not a bump");
+    }
 }
 
 fn clone_profiles_library(specs: &Path) -> Result<()> {

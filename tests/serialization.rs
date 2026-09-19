@@ -1535,3 +1535,176 @@ fn a_compound_field_its_class_does_not_declare_is_reported() {
         "a conforming compound was reported"
     );
 }
+
+/// An object a file introduces and says nothing else about comes back in that file.
+///
+/// Real boundary sets are built this way: Equipment Boundary writes
+/// `<cim:ConnectivityNode rdf:ID="_x"/>` to *introduce* the node, and Topology Boundary
+/// supplies the one attribute it has, with `rdf:about`. Deciding what an output file
+/// contains by asking whether the object has a value there — an inference — deletes the
+/// declaration and leaves the other file referring to an object no document defines.
+/// Membership is recorded when the element is read, and the recorded fact wins (D55).
+#[test]
+fn a_file_that_introduces_an_object_without_describing_it_still_writes_it() {
+    let eqbd = doc(&format!(
+        r##"{}
+  <cim:ConnectivityNode rdf:ID="_{A}"/>"##,
+        header("http://iec.ch/TC57/ns/CIM/EquipmentBoundary-EU/3.0")
+    ));
+    let tp = doc(&format!(
+        r##"{}
+  <cim:ConnectivityNode rdf:about="#_{A}">
+    <cim:ConnectivityNode.TopologicalNode rdf:resource="#_{B}"/>
+  </cim:ConnectivityNode>
+  <cim:TopologicalNode rdf:ID="_{B}"/>"##,
+        header("http://iec.ch/TC57/ns/CIM/Topology-EU/3.0")
+    ));
+
+    let mut ds = Dataset::new(SCHEMA);
+    read_into(
+        &mut ds,
+        eqbd.as_bytes(),
+        Some("EQBD.xml"),
+        &ReadOptions::lenient(),
+    )
+    .unwrap();
+    read_into(
+        &mut ds,
+        tp.as_bytes(),
+        Some("TP.xml"),
+        &ReadOptions::lenient(),
+    )
+    .unwrap();
+
+    let dir = std::env::temp_dir().join(format!("cim-childless-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let saved = ds.save_as_loaded(&dir).unwrap();
+    let written: Vec<String> = saved
+        .written
+        .iter()
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let boundary = written
+        .iter()
+        .find(|t| t.contains("EquipmentBoundary"))
+        .expect("the boundary file was written");
+    assert!(
+        boundary.contains(&format!("rdf:ID=\"_{A}\"")),
+        "the file that introduced the node dropped it:\n{boundary}"
+    );
+    // And the node is introduced exactly once across the set: the other file still refers
+    // to it, because that is what its own document said.
+    let introductions = written
+        .iter()
+        .filter(|t| t.contains(&format!("rdf:ID=\"_{A}\"")))
+        .count();
+    assert_eq!(
+        introductions, 1,
+        "the node is introduced in {introductions} files"
+    );
+}
+
+/// An `rdf:ID` that is not an XML `NCName` is repaired, and the repair is reported.
+///
+/// IEC 61970-552 writes an underscore before the UUID precisely because an `NCName` cannot
+/// begin with a digit. A published ENTSO-E boundary file omits it, which makes the document
+/// invalid RDF/XML — and parsing strips that decoration, so the value is right and nothing
+/// downstream can tell the identifier was rewritten on the way out. Repairing is the only
+/// option; repairing in silence is not (D56).
+#[test]
+fn an_rdf_id_that_is_not_an_ncname_is_repaired_and_said_so() {
+    let src = doc(&format!(
+        r##"{}
+  <cim:Substation rdf:ID="{A}">
+    <cim:IdentifiedObject.name>S</cim:IdentifiedObject.name>
+  </cim:Substation>"##,
+        header("http://iec.ch/TC57/ns/CIM/CoreEquipment-EU/3.0")
+    ));
+    // Lenient reading, deliberately: the identifier *form* report is opt-in because
+    // published files deviate harmlessly all the time, but a rewrite of the document is
+    // not a matter of taste.
+    let (ds, report) = read(&src);
+    let found: Vec<_> = report
+        .iter()
+        .filter(|d| d.rule == Rule::NonConformingMrid)
+        .collect();
+    assert_eq!(
+        found.len(),
+        1,
+        "expected exactly one repair report, got {report:?}"
+    );
+    assert!(
+        found[0].message.contains("NCName") && found[0].message.contains(&format!("_{A}")),
+        "the report does not say what the identifier was changed to: {}",
+        found[0].message
+    );
+
+    let mut buf = Vec::new();
+    cim_rs::writer::write(&ds, &mut buf, &WriteOptions::default()).unwrap();
+    let out = String::from_utf8(buf).unwrap();
+    assert!(out.contains(&format!("rdf:ID=\"_{A}\"")), "{out}");
+    common::assert_well_formed("repaired.xml", &out);
+}
+
+/// A class no profile in the write set mentions is introduced by the file that carries it.
+///
+/// `rdf:about` asserts that some other file defines the object. When the write set says
+/// nothing about the class at all, that assertion is false and unrepairable: no file in the
+/// set defines it. Real exports reach this by under-declaring their header — an Equipment
+/// file naming only `EquipmentCore` while carrying a class from Equipment Operation — and
+/// the answer is the one IEC 61970-552 gives for a first serialization (D57).
+#[test]
+fn a_class_the_write_set_does_not_declare_is_introduced_rather_than_referred_to() {
+    use cim_rs::writer::{IdStyle, id_style_for};
+    let eq = SCHEMA
+        .profile_by_iri("http://iec.ch/TC57/ns/CIM/CoreEquipment-EU/3.0")
+        .expect("the Equipment profile");
+    let dl = SCHEMA
+        .profile_by_iri("http://iec.ch/TC57/ns/CIM/DiagramLayout-EU/3.0")
+        .expect("the Diagram Layout profile");
+
+    // A Diagram Layout class, written into a file that declares only Equipment.
+    let diagram = classes::Diagram;
+    assert_eq!(
+        SCHEMA.class(diagram).profiles & eq.mask(),
+        0,
+        "this test needs a class the Equipment profile does not mention"
+    );
+    assert_eq!(
+        id_style_for(SCHEMA, diagram, eq.mask()),
+        IdStyle::RdfId,
+        "nothing in the write set defines it, so `rdf:about` would point nowhere"
+    );
+    assert_eq!(
+        id_style_for(SCHEMA, diagram, dl.mask()),
+        IdStyle::RdfId,
+        "Diagram Layout defines Diagram"
+    );
+
+    // The rule this must not swallow, and the whole reason `rdf:about` exists: a class the
+    // write set *does* mention but does not define is described, not introduced. Steady
+    // State Hypothesis carries `Equipment.inService` and introduces no equipment, so an
+    // SSH file says `rdf:about` — the case D4 and D5 were extracted from, and the one a
+    // fallback that reached too far would quietly break.
+    let ssh = SCHEMA
+        .profile_by_iri("http://iec.ch/TC57/ns/CIM/SteadyStateHypothesis-EU/3.0")
+        .expect("the Steady State Hypothesis profile");
+    let line = classes::Equipment;
+    assert_ne!(
+        SCHEMA.class(line).profiles & ssh.mask(),
+        0,
+        "this test needs a class SSH mentions"
+    );
+    assert_eq!(
+        SCHEMA.class(line).defined_in & ssh.mask(),
+        0,
+        "this test needs a class SSH does not define"
+    );
+    assert_eq!(
+        id_style_for(SCHEMA, line, ssh.mask()),
+        IdStyle::RdfAbout,
+        "SSH adds to equipment defined by the Equipment file"
+    );
+}

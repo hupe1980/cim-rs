@@ -7,7 +7,64 @@ is where incompatible changes land.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
-## [0.2.0] — unreleased
+## [0.3.0] — 2026-09-19
+
+Three fixes to what a model looks like on the way out, found by re-exporting ENTSO-E's
+quality-check corpus — real transmission operator output — and comparing the documents.
+Each changes bytes this crate writes for input shapes the conformity models do not contain.
+
+### Fixed
+
+- **An object a file introduces without describing it is exported by that file.** Boundary
+  sets write `<cim:ConnectivityNode rdf:ID="_x"/>` and leave the attributes to another file.
+  Choosing an output file's contents by which objects have a *value* there dropped 512 of
+  591 such nodes from a published ENTSO-E boundary set, and counted none of them in
+  `SaveReport::unwritten`, because the other file still wrote them.
+- **A class no profile in the write set mentions is introduced, not referred to.** Identity
+  now has three cases: a class the write set defines gets `rdf:ID`, one it mentions but does
+  not define gets `rdf:about`, and one it does not mention at all gets `rdf:ID` — because
+  `rdf:about` would name a definition no file in the set contains. Real headers reach the
+  third case by under-declaring their profiles.
+- **An `rdf:ID` that is not an XML `NCName` is reported when it is repaired.** `CIM0004` is
+  raised whether or not identifier-form reporting was requested: the input cannot be written
+  back as it stands, so the output differs from it, and that is not something to do quietly.
+
+### Added
+
+- **`cim --version` / `-V`.** The released binaries are downloaded on their own, detached
+  from the repository they were built from, and had no way to say which release they were.
+- **`writer::object_in_profiles`** — whether an object belongs in a file serving a set of
+  profiles, which is not the same question as whether it has anything to say there.
+
+### Changed
+
+- `ReadOptions::report_non_conforming_mrids` governs the identifier *form* report only. It
+  no longer governs reports of identifiers this crate had to rewrite to emit at all.
+- `quick-xml` is `0.42`, whose events carry `&str` rather than bytes.
+- Output differs from `0.2.0` for the inputs above: introduced objects appear, identity
+  forms settle.
+
+### Repository
+
+- `tests/qocdc.rs` re-exports and compares the 95 quality-corpus sets that read cleanly —
+  225 files, class for class, identifier for identifier, value for value — differences each
+  model against itself, and exports 250,524 N-Triples. That corpus is mostly CGMES 2.4.15,
+  whose published SHACL shapes are all invalid, so it is the strongest structural evidence
+  that vintage has.
+- The value census walks every conformity model set rather than a hard-coded list of four,
+  and prints its coverage: 951,340 values. Value comparisons normalise line endings, which
+  XML 1.0 §2.11 removes before any parser sees them.
+- CGMES 2.4.15 generates from ENTSO-E's own `CGMES2415_Components_2020` archive, byte for
+  byte the same sources: the profiles library deleted its copy from the main branch, leaving
+  the pinned tag as the only surviving source for the vintage in production.
+- `fetch-specs` reports when a path the generator reads no longer exists on that library's
+  default branch, so adopting a newer tag is known to be a migration.
+- `cargo-semver-checks` runs on every tag against the published baseline, reporting rather
+  than failing while a pre-1.0 minor bump permits every breaking change.
+- The fetched RDF-Syntax User Guide is v2.0.0 (CIM WG approved 2026-01-27); citations follow
+  it.
+
+## [0.2.0] — 2026-09-04
 
 Fidelity and the two halves of the tooling: a re-exported model is now the file that was
 read down to how each number was written, a document written with default options is
@@ -83,5 +140,6 @@ object store with multi-profile merge, streaming CIM/XML reader and writer, prof
 validation with stable rule codes, typed RDF export, difference models read, applied,
 written and computed, and the `cim` command line.
 
-[0.2.0]: https://github.com/hupe1980/cim-rs/compare/v0.1.0...HEAD
+[0.3.0]: https://github.com/hupe1980/cim-rs/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/hupe1980/cim-rs/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/hupe1980/cim-rs/releases/tag/v0.1.0

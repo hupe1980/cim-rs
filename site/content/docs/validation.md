@@ -42,7 +42,7 @@ model raises the *read* rules too.
 | `CIM0001` | `UnknownClass` | read | An element names a class the schema does not define |
 | `CIM0002` | `UnknownAttribute` | read · check | A property the schema does not define, or one the object's class does not have |
 | `CIM0003` | `InvalidValue` | read | A value could not be parsed as its declared type |
-| `CIM0004` | `NonConformingMrid` | read · check | An identifier is not a UUID, or not written as 61970-552 requires |
+| `CIM0004` | `NonConformingMrid` | read · check | An identifier is not a UUID, or not written as 61970-552 requires. Opt-in on read — except a repair, which is always reported |
 | `CIM0005` | `DuplicateMrid` | read | One identifier used by two unrelated classes |
 | `CIM0006` | `DanglingReference` | check | A reference points outside the dataset |
 | `CIM0007` | `MissingRequired` | check | A mandatory attribute is absent |

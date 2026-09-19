@@ -177,13 +177,13 @@ fn bench_synthetic() {
 fn bench_corpus() {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .find(|p| p.join("specs").is_dir());
+        .find(|p| p.join("concepts/references").is_dir());
     let Some(workspace) = workspace else {
         println!("\n== published corpus not present; run `cargo xtask fetch-specs` ==");
         return;
     };
     let root = workspace
-        .join("specs/test-models/cas-3.0.3")
+        .join("concepts/references/test-models/cas-3.0.3")
         .join("CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0/RealGrid");
     // A corpus that is *present* but does not hold the model this benchmark names is a
     // different thing from a corpus that is absent, and only the first is a skip. The

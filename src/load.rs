@@ -633,13 +633,12 @@ impl Dataset {
                 continue;
             }
 
-            let mut ids: Vec<_> = self
-                .objects_from(i)
-                .filter(|&id| {
-                    self.get(id)
-                        .is_some_and(|o| crate::writer::object_has_content_in(schema, o, profiles))
-                })
-                .collect();
+            // Everything the file carried, whether or not it said anything about it.
+            // Membership is recorded when the element is read; whether the object has a
+            // value in this file's profiles is an inference, and it is wrong for a shape
+            // boundary sets use constantly — `<cim:ConnectivityNode rdf:ID="_x"/>` with no
+            // property children, introduced here and described by Topology Boundary (D55).
+            let mut ids: Vec<_> = self.objects_from(i).collect();
             if !unsourced_placed && !unsourced.is_empty() {
                 let before = ids.len();
                 ids.extend(unsourced.iter().copied().filter(|&id| {

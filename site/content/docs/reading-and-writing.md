@@ -38,6 +38,7 @@ Reading is forgiving in specific, documented ways — and never silently:
 |---|---|
 | A UUID written without hyphens | Keeps its identity *and* its spelling; flagged `CIM0004` |
 | A non-UUID identifier | Kept verbatim; flagged `CIM0004` |
+| An `rdf:ID` that is not an XML name — `rdf:ID="7d06…"`, no underscore | Repaired on write, because the input is not a writable document; flagged `CIM0004` **always**, since the output differs from the input |
 | A reference written as an absolute IRI | Resolves to the UUID in its fragment |
 | An enumeration literal under the wrong namespace | Recovered by qualified name; flagged `CIM0003` |
 | An unparseable value | Dropped, object kept; flagged `CIM0003` |
@@ -180,6 +181,12 @@ header, the profiles it declared and the objects that came from it — because s
 profile alone would put every authority's equipment in every authority's file in a merged
 common grid model.
 
+"The objects that came from it" means every object whose element was in that document,
+including the ones it says nothing else about. Boundary sets are built that way:
+`<cim:ConnectivityNode rdf:ID="_x"/>` in Equipment Boundary introduces the node and Topology
+Boundary supplies its one attribute. The reader records which document each element came
+from, so both files come back as they were.
+
 ### The form of the document
 
 Two rules govern what the writer emits, and both are read from the vocabulary rather than
@@ -192,7 +199,11 @@ Emitting the most specific class instead produces a document that fails the prof
 SHACL shapes.
 
 **`rdf:ID` versus `rdf:about`**, per class per profile — see
-[Concepts](@/docs/concepts.md).
+[Concepts](@/docs/concepts.md). Three cases: a class the file's profiles *define* is
+introduced with `rdf:ID`; one they *mention but do not define* is described with
+`rdf:about`; one they do not mention at all is introduced, since `rdf:about` would name a
+definition no file in the set contains. Real exports reach the third case by
+under-declaring their header.
 
 You can ask what the writer would do without rendering anything:
 

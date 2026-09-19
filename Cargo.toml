@@ -4,8 +4,8 @@
 # `[lib] name = "cim"` would recover the shorter import at the cost of an import path that
 # does not match what the reader typed into `cargo add`.
 name = "cim-rs"
-version = "0.2.0"
-description = "IEC Common Information Model (CIM/CGMES) for power systems: typed model, CIM/XML I/O, profile-aware validation"
+version = "0.3.0"
+description = "IEC CIM/CGMES for power systems: CIM/XML I/O that reproduces the file set, profile-aware validation, typed RDF export"
 keywords = ["cim", "cgmes", "iec61970", "power-systems", "grid"]
 categories = ["science", "parser-implementations", "encoding"]
 readme = "README.md"
@@ -19,7 +19,7 @@ authors.workspace = true
 exclude = [
     "/xtask",
     "/fuzz",
-    "/specs",
+    "/concepts",
     "/.github",
     "/.cargo",
     "/deny.toml",
@@ -54,7 +54,7 @@ repository = "https://github.com/hupe1980/cim-rs"
 authors = ["Frank Hübner <hupe@huebner-frank.de>"]
 
 [workspace.dependencies]
-quick-xml = "0.41"
+quick-xml = "0.42"
 anyhow = "1"
 
 [dependencies]

@@ -38,13 +38,15 @@ fn main() -> cim_rs::Result<()> {
 
 The IEC Common Information Model is how European transmission system operators exchange
 grid models. The mature implementations are Java ([PowSyBl][powsybl]), C++ (libcimpp) and
-Python ([pycgmes][pycgmes], CIMpy). Rust had only an early multi-crate experiment
-([cimoxide][cimoxide]) — and Rust is exactly where the gap
-hurts: high-throughput model servers, edge grid controllers, WebAssembly browser tooling
-and safety-critical pipelines all want a fast, memory-safe, dependency-light CIM core.
+Python ([pycgmes][pycgmes], CIMpy) — and Rust is where the gap hurts: high-throughput model
+servers, edge grid controllers, WebAssembly browser tooling and safety-critical pipelines
+all want a fast, memory-safe, dependency-light CIM core.
 
 `cim-rs` is that core. One crate, one mandatory dependency, and the whole typed model
-generated from the vocabularies ENTSO-E publishes.
+generated from the vocabularies ENTSO-E publishes. The other Rust entrant
+([cimoxide][cimoxide]) takes the opposite design — a struct per class over a materialised
+quad store, with SHACL and SPARQL inside the library — which makes the comparison a useful
+one rather than a race.
 
 [powsybl]: https://powsybl.readthedocs.io/projects/powsybl-core/en/stable/grid_exchange_formats/cgmes/
 [pycgmes]: https://github.com/alliander-opensource/pycgmes
@@ -76,8 +78,9 @@ absolute IRIs. Read as opaque text, those objects lose their name in RDF and spl
 <div class="card">
 <h3>Provenance decides the export</h3>
 <p><code>IdentifiedObject.mRID</code> is declared in ten of eleven profiles. Writing from
-declarations alone inflated a 112 MiB model to 399 MiB. Each value records the file it
-came from.</p>
+declarations alone inflated a 112 MiB model to 399 MiB. Each value records the file it came
+from — and so does each <em>object</em>, so a boundary file that introduces a node without
+describing it still exports it.</p>
 </div>
 <div class="card">
 <h3>The element class is derived</h3>

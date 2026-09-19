@@ -209,7 +209,7 @@ pub fn write_profiles<W: Write>(
 
     let ids: Vec<_> = dataset
         .iter()
-        .filter(|(_, o)| object_has_content_in(schema, o, profiles))
+        .filter(|(_, o)| object_in_profiles(schema, o, profiles))
         .map(|(id, _)| id)
         .collect();
     write_objects(dataset, ids.into_iter(), out, &opts)
@@ -245,18 +245,15 @@ pub fn write_difference<W: Write>(
         w.bind_statement_namespaces(s);
     }
     let mut opts = options.clone();
-    opts.header = HeaderSource::Given(Box::new(header));
+    opts.header = HeaderSource::Given(Box::new(header.clone()));
     w.start_document(&opts)?;
 
-    let HeaderSource::Given(h) = &opts.header else {
-        unreachable!("set to Given above")
-    };
-    w.header_open(h)?;
-    w.header_body(h)?;
+    w.header_open(&header)?;
+    w.header_body(&header)?;
     // 61970-552 lists what is being replaced before what replaces it.
     w.statements("reverseDifferences", &diff.reverse)?;
     w.statements("forwardDifferences", &diff.forward)?;
-    w.header_close(h)?;
+    w.header_close(&header)?;
     w.end_document()
 }
 
@@ -273,6 +270,21 @@ pub fn object_has_content_in(schema: &Schema, obj: &Object, profiles: ProfileMas
     obj.slots()
         .iter()
         .any(|s| slot_belongs_to(schema, s, profiles))
+}
+
+/// Whether an object belongs in a file serving `profiles` — which is not the same question
+/// as whether it has anything to *say* there.
+///
+/// A boundary set introduces a node and says nothing else about it:
+/// `<cim:ConnectivityNode rdf:ID="_x"/>` in Equipment Boundary, with Topology Boundary
+/// supplying the one attribute it has. Selecting by content alone drops that element, and
+/// the result is a file set whose Topology Boundary document points `rdf:about` at a
+/// definition no document contains. So an object also belongs where the profile both
+/// *introduces* its class and has seen it — which is a fact the reader recorded, not an
+/// inference (D55).
+pub fn object_in_profiles(schema: &Schema, obj: &Object, profiles: ProfileMask) -> bool {
+    object_has_content_in(schema, obj, profiles)
+        || (obj.profiles() & profiles != 0 && schema.class(obj.class()).defined_in & profiles != 0)
 }
 
 /// The prefix bindings of one output document.
@@ -1017,6 +1029,19 @@ fn resolve_id_style(options: &WriteOptions, class: &ClassDef) -> IdStyle {
         IdStyle::Auto => {
             // Writing everything into one document makes that document the definition.
             if options.profiles == 0 || class.defined_in & options.profiles != 0 {
+                IdStyle::RdfId
+            } else if class.profiles & options.profiles == 0 {
+                // No profile this file serves mentions the class at all, so `rdf:about`
+                // would name a definition no file in the set contains. Real headers reach
+                // this by under-declaring — Equipment naming only `EquipmentCore/3/1` while
+                // carrying `LoadArea` — and the file carrying the object is then the only
+                // thing that can introduce it. The header is a claim, the data is evidence,
+                // which is D7's rule for values applied to identity (D57).
+                //
+                // Imprecise in one unobserved case: two files that both under-declare and
+                // both carry the object would each introduce it. Recovering that needs each
+                // document's form carried rather than re-derived (D2), and neither corpus
+                // contains it.
                 IdStyle::RdfId
             } else {
                 IdStyle::RdfAbout

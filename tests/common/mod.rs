@@ -1,7 +1,7 @@
 //! Locating the ENTSO-E conformity test corpus.
 //!
-//! The models are fetched by `cargo xtask fetch-specs` into the gitignored `specs/`
-//! directory. They are licensed CC BY-SA 4.0 and owned by ENTSO-E, so they serve as a
+//! The models are fetched by `cargo xtask fetch-specs` into the gitignored
+//! `concepts/references/` directory. They are licensed CC BY-SA 4.0 and owned by ENTSO-E, so they serve as a
 //! local test corpus only and are never redistributed with this crate. Tests that need
 //! them skip when the corpus is absent, keeping `cargo test` green on a fresh clone.
 
@@ -14,14 +14,14 @@ pub fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-pub fn specs() -> Option<PathBuf> {
-    let p = workspace_root().join("specs");
+pub fn references() -> Option<PathBuf> {
+    let p = workspace_root().join("concepts/references");
     p.is_dir().then_some(p)
 }
 
 /// Root of the CGMES 3.0 conformity assessment configurations.
 pub fn cgmes3_models() -> Option<PathBuf> {
-    let p = specs()?
+    let p = references()?
         .join("test-models/cas-3.0.3")
         .join("CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0");
     p.is_dir().then_some(p)
@@ -137,6 +137,33 @@ pub fn identifier_census(text: &str) -> std::collections::BTreeSet<String> {
     }
     out
 }
+/// Every directory under `root` that directly holds instance files.
+///
+/// The censuses walk all of them rather than a hand-written list: a list is a coverage
+/// claim nobody re-reads, and the one that used to live in `identity.rs` had narrowed to
+/// four model sets while the documentation still quoted the number the whole corpus gives
+/// (D54).
+pub fn model_dirs(root: &Path) -> Vec<PathBuf> {
+    fn walk(d: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(d) else { return };
+        let mut has_xml = false;
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("xml")) {
+                has_xml = true;
+            }
+        }
+        if has_xml {
+            out.push(d.to_path_buf());
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, &mut out);
+    out.sort();
+    out
+}
 
 /// Every attribute value in a document, exactly as it is written.
 ///
@@ -170,8 +197,15 @@ pub fn value_census(text: &str) -> std::collections::BTreeMap<(String, String), 
             continue;
         }
         let Some(end) = rest.find('<') else { break };
-        *out.entry((name.to_owned(), rest[..end].to_owned()))
-            .or_default() += 1;
+        // XML 1.0 §2.11: a conforming parser turns `\r\n` and a lone `\r` into `\n`
+        // before the application ever sees the text, so a producer that wrote CRLF inside
+        // a description cannot have it reproduced — the information is gone at parse, for
+        // every implementation. Normalising both sides here asks the question that is
+        // actually answerable: does the re-export preserve the value *a parser sees*.
+        // Without it, ENTSO-E's own quality corpus reports three false differences and the
+        // check that would catch a real loss of a control character gets switched off.
+        let text = rest[..end].replace("\r\n", "\n").replace('\r', "\n");
+        *out.entry((name.to_owned(), text)).or_default() += 1;
     }
     out
 }
@@ -235,9 +269,7 @@ pub fn check_well_formed(text: &str) -> Result<(), String> {
     reader.config_mut().check_end_names = true;
     reader.config_mut().expand_empty_elements = false;
 
-    let describe = |e: &quick_xml::events::BytesStart<'_>| {
-        String::from_utf8_lossy(e.name().as_ref()).into_owned()
-    };
+    let describe = |e: &quick_xml::events::BytesStart<'_>| e.name().as_ref().to_owned();
 
     loop {
         let (ns, event) = match reader.read_resolved_event() {
@@ -254,14 +286,14 @@ pub fn check_well_formed(text: &str) -> Result<(), String> {
             return Err(format!(
                 "element <{}> uses undeclared prefix {:?} at byte {}",
                 describe(&start),
-                String::from_utf8_lossy(p),
+                p,
                 reader.buffer_position()
             ));
         }
 
         // `with_checks(true)` is what reports a duplicate attribute; it is off on the
         // reader's hot path, so only this sees one.
-        let mut seen: Vec<Vec<u8>> = Vec::new();
+        let mut seen: Vec<String> = Vec::new();
         for attr in start.attributes().with_checks(true) {
             let attr = attr.map_err(|e| {
                 format!(
@@ -269,29 +301,28 @@ pub fn check_well_formed(text: &str) -> Result<(), String> {
                     describe(&start)
                 )
             })?;
-            let key = attr.key.as_ref().to_vec();
+            let key = attr.key.as_ref().to_owned();
             if seen.contains(&key) {
                 return Err(format!(
                     "element <{}> declares attribute {:?} twice",
                     describe(&start),
-                    String::from_utf8_lossy(&key)
+                    key
                 ));
             }
             // An attribute's prefix must be bound too, `xmlns` and `xml` aside.
             // The bindings live on the reader's resolver, which is reachable only through
             // `resolver_mut`; `start` is an owned clone, so borrowing the reader here does
             // not conflict with the iteration.
-            if let Some(i) = key.iter().position(|&b| b == b':')
-                && !matches!(&key[..i], b"xmlns" | b"xml")
+            if let Some((prefix, _)) = key.split_once(':')
+                && !matches!(prefix, "xmlns" | "xml")
                 && matches!(
                     reader.resolver_mut().resolve_attribute(attr.key).0,
                     ResolveResult::Unknown(_)
                 )
             {
                 return Err(format!(
-                    "element <{}> attribute {:?} uses an undeclared prefix",
+                    "element <{}> attribute {key:?} uses an undeclared prefix",
                     describe(&start),
-                    String::from_utf8_lossy(&key)
                 ));
             }
             seen.push(key);

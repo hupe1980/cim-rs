@@ -152,9 +152,12 @@ State Hypothesis file in the corpus writes `<cim:Equipment rdf:about="…">` car
 but `inService`, and the SSH shapes require `IdentifiedObject.mRID`. Reproducing that
 faithfully is correct; hiding it would not be.
 
-Running SHACL is deliberately **not** this crate's job — there is no mature SHACL engine in
-Rust and writing one would be a second project. Emitting data an engine can actually consume
-is the job, and it is done.
+Running SHACL is deliberately **not** this crate's job — a choice rather than an absence of
+options. A Rust SHACL engine exists and returns the same verdict `pyshacl` does on ENTSO-E's
+Simple shape sets; it also skips the `sh:sparql` constraints the Complex sets are built from
+without saying so, and "no violations" for constraints nobody ran is not a verdict this
+crate will put its name on. Emitting data an engine can consume is the job, and it is done;
+choosing the engine is yours.
 
 ## Reading RDF back
 

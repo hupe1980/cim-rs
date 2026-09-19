@@ -45,6 +45,7 @@ loaded into **one** model, which is what a CGMES profile set is.
 | `--limit N` | How many findings to list (default 20; `0` for all) |
 | `-q`, `--quiet` | Less chatter |
 | `-h`, `--help` | Usage |
+| `-V`, `--version` | Which release this binary is |
 
 ## Exit status
 

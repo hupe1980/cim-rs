@@ -1,12 +1,13 @@
 //! Repository automation for cim-rs.
 //!
 //! This crate is never published. It is the whole of the repository's tooling: fetching
-//! the standards artifacts, turning the RDFS vocabularies under `specs/` into the Rust
-//! sources committed under `src/generated/`, and driving the interoperability check.
+//! the standards artifacts, turning the RDFS vocabularies under `concepts/references/`
+//! into the Rust sources committed under `src/generated/`, and driving the
+//! interoperability check.
 //!
 //! Usage:
-//!   cargo xtask fetch-specs       download the standards artifacts into specs/
-//!   cargo xtask fetch-specs --clean   discard specs/ first
+//!   cargo xtask fetch-specs       download the standards artifacts into concepts/references/
+//!   cargo xtask fetch-specs --clean   discard concepts/references/ first
 //!   cargo xtask codegen           regenerate sources in place
 //!   cargo xtask codegen --check   fail if the committed sources are stale
 //!   cargo xtask inspect           print a summary of the parsed schema
@@ -27,7 +28,7 @@ use std::path::{Path, PathBuf};
 const USAGE: &str = "\
 usage: cargo xtask <command>
 
-  fetch-specs [--clean]           download the standards artifacts into specs/
+  fetch-specs [--clean]           download the standards artifacts into concepts/references/
   codegen [--check]               regenerate src/generated from the RDFS vocabularies
   inspect                         summarise every parsed vintage
   shacl [model] [--vintage KEY]   validate the RDF export against ENTSO-E's SHACL shapes
@@ -87,9 +88,10 @@ fn root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Resolve one vintage's RDFS files, which `cargo xtask fetch-specs` places under `specs/`.
+/// Resolve one vintage's RDFS files, which `cargo xtask fetch-specs` places under
+/// `concepts/references/`.
 fn load(vintage: &'static vintage::Vintage) -> Result<ir::Schema> {
-    let dir = root().join("specs").join(vintage.rdfs_dir);
+    let dir = root().join(specs::DIR).join(vintage.rdfs_dir);
     if !dir.is_dir() {
         bail!(
             "missing {}\nRun `cargo xtask fetch-specs` first to download the standards \

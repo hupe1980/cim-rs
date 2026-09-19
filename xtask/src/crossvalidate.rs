@@ -54,7 +54,7 @@ use anyhow::{Context, Result, bail};
 /// so PowSyBl builds a network with resolved tie lines rather than a bag of dangling ones.
 /// Pointing at a parent directory instead would load several authorities' models at once
 /// and cross-validate an assembly no exchange ever produces.
-const DEFAULT_MODEL: &str = "specs/test-models/cas-3.0.3/\
+const DEFAULT_MODEL: &str = "concepts/references/test-models/cas-3.0.3/\
     CGMES_ConformityAssessmentScheme_TestConfigurations_v3-0-3/v3.0/\
     MicroGrid/MicroGrid-Type1/MicroGrid-Type1-Merged";
 

@@ -5,11 +5,11 @@ Everything here is about working *on* the crate. For using it, start at the
 
 ## Getting set up
 
-The standards artifacts are **not vendored** — `specs/` is gitignored and fetched. Every
-repository task is a subcommand of one program:
+The standards artifacts are **not vendored** — `concepts/references/` is gitignored and
+fetched. Every repository task is a subcommand of one program:
 
 ```bash
-cargo xtask fetch-specs         # ENTSO-E RDFS + SHACL + conformity models -> specs/
+cargo xtask fetch-specs         # ENTSO-E RDFS + SHACL + conformity models -> concepts/references/
 cargo xtask codegen             # RDFS -> src/generated/
 cargo xtask codegen --check     # CI gate: committed sources match the vocabularies
 cargo xtask inspect             # summarise every parsed vintage
@@ -21,11 +21,15 @@ cargo bench -p cim-rs           # throughput, synthetic and (if fetched) RealGri
 ```
 
 `xtask` owns the artifact list as well as the vintage table, so `fetch-specs` finishes by
-asking the generator whether every vocabulary file it needs actually arrived.
+checking that every vocabulary file the generator needs arrived, and that the paths it reads
+still exist on the profiles library's default branch. The second is a note, never an error —
+the tag is pinned — but it says when adopting a newer tag would be a path migration.
 
-Running SHACL stays somebody else's job: there is no mature SHACL engine in Rust, so
-`cargo xtask shacl` drives [`pyshacl`](https://github.com/RDFLib/pySHACL) and reads its
-report. Point `PYSHACL` at a virtualenv if the binary is not on `PATH`:
+Running SHACL stays somebody else's job: `cargo xtask shacl` drives
+[`pyshacl`](https://github.com/RDFLib/pySHACL) and reads its report. A Rust engine agrees
+with it on ENTSO-E's Simple shape sets and silently skips the `sh:sparql` constraints the
+Complex sets use, which is why it is not the one driving the gate. Point `PYSHACL` at a
+virtualenv if the binary is not on `PATH`:
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install pyshacl
@@ -87,15 +91,16 @@ vocabularies do not say so themselves, the profile IRIs their instance files dec
 run `cargo xtask codegen`. Nothing in the hand-written core names a class, so a new vintage
 is a regeneration rather than a rewrite.
 
-## The `specs/` corpus
+## The `concepts/references/` corpus
 
-All standards inputs live in `specs/`, fetched by `cargo xtask fetch-specs` (idempotent,
-cached, pinned refs, SHA-256 `MANIFEST.txt`):
+All standards inputs live in `concepts/references/` — the published material the notes in
+`concepts/` cite — fetched by `cargo xtask fetch-specs` (idempotent, cached, pinned refs,
+SHA-256 `MANIFEST.txt`):
 
 | Path | Content | License |
 |---|---|---|
-| `application-profiles-library/` | ENTSO-E RDFS + SHACL + PROF for CGMES 3.0 (incl. Header AP, beta 501-Ed2 RDFS), CGMES 2.4 archive, NC profiles — pinned tag | Apache-2.0 |
-| `cgmes-2.4.15/` | CGMES 2.4.15 RDFS (2016) + 2020 component refresh | Apache-2.0 (UCAIug/ENTSO-E) |
+| `application-profiles-library/` | ENTSO-E RDFS + SHACL + PROF for CGMES 3.0 (incl. Header AP, beta 501-Ed2 RDFS), NC profiles — pinned tag | Apache-2.0 |
+| `cgmes-2.4.15/` | CGMES 2.4.15 RDFS (2016) + 2020 component refresh — the source `cgmes2` generates from, since the profiles library deleted its copy | Apache-2.0 (UCAIug/ENTSO-E) |
 | `test-models/cas-2.0/` | MicroGrid, MiniGrid, SmallGrid, RealGrid, FullGrid conformity test configurations | CC BY-SA 4.0 |
 | `test-models/cas-3.0.3/` | CGMES 3.0 conformity assessment test configurations | CC BY-SA 4.0 |
 | `test-models/qocdc-3.2.1/` | ENTSO-E QoCDC quality-gate models — real TSO exports, conformant and deliberately not; swept by `tests/qocdc.rs` | CC BY-SA 4.0 |
@@ -110,7 +115,7 @@ pipeline may depend on them.
 ## Tests
 
 `cargo test --workspace --all-features` is the whole suite. Corpus-backed tests skip cleanly
-when `specs/` is absent, so a fresh clone is green.
+when `concepts/references/` is absent, so a fresh clone is green.
 
 Robustness is covered two ways: `tests/robustness.rs` runs a deterministic mutation campaign
 (truncation at every byte, single-byte corruption, region deletion) on stable as part of
@@ -176,9 +181,15 @@ everything that can say no runs before anything irreversible.
 
 The tag is checked against the manifest first, because it costs nothing and is the mistake
 most easily made. Then the CI gates again under `--locked`, since a tag can be pushed at a
-commit CI never saw; then `cargo publish --dry-run`; then the `cim` binaries for four
-targets — Linux on both architectures, macOS on Apple silicon, Windows on x86-64 — each with
-a SHA-256 beside it. Only then does the publish happen.
+commit CI never saw; then `cargo-semver-checks` against the published baseline; then
+`cargo publish --dry-run`; then the `cim` binaries for four targets — Linux on both
+architectures, macOS on Apple silicon, Windows on x86-64 — each with a SHA-256 beside it.
+Only then does the publish happen.
+
+`cargo-semver-checks` reports and does not fail the build: before 1.0 a minor bump permits
+every breaking change, so it skips every lint. It is wired anyway, and it cannot see this
+crate's other contract — a release is breaking when the *bytes it writes* change, with every
+signature intact.
 
 `workflow_dispatch` runs everything except the two publish steps, so the release path can be
 exercised without spending a version number to find out whether it works.

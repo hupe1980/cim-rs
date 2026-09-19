@@ -76,6 +76,25 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+      # What the published API did between the last release and this one, read off the
+      # registry rather than off the changelog. Pre-1.0 it reports nothing — a minor bump
+      # permits every breaking change, so every lint is skipped — and it is wired now
+      # anyway, because the release that first means to keep compatibility is the worst
+      # possible moment to discover the wiring does not work. It also never sees this
+      # crate's other contract: a release can be breaking because the *bytes it writes*
+      # changed, with every signature intact, which is what 0.3.0 is. See
+      # `concepts/STABILITY.md`.
+      - name: API changes against the published baseline
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          # Named, because the workspace also holds `xtask`, which is never published and
+          # has no baseline to compare against.
+          package: cim-rs
+          feature-group: all-features
+          # Reported, not enforced, while the minor version is the breaking one.
+          verbose: true
+        continue-on-error: true
+
       # `cargo publish --dry-run` builds the tarball exactly as the registry will receive
       # it, from a clean checkout of what it contains — so a file the library needs but
       # `exclude` drops fails here rather than on crates.io, where it cannot be fixed

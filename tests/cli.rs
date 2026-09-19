@@ -217,6 +217,22 @@ fn the_vintage_is_detected_from_the_input() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A downloaded binary says which release it is.
+#[test]
+fn the_binary_says_which_release_it_is() {
+    // The released binaries are built from the tag and downloaded on their own, detached
+    // from the repository they came from, so this is the only thing that identifies one.
+    for flag in ["--version", "-V"] {
+        let out = cim().arg(flag).output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{flag}: {out:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            format!("cim {}", env!("CARGO_PKG_VERSION")),
+            "{flag}"
+        );
+    }
+}
+
 /// An unknown flag is refused rather than taken for an input path.
 #[test]
 fn a_mistyped_flag_is_an_error_rather_than_a_silently_ignored_one() {

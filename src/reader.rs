@@ -178,8 +178,8 @@ pub fn sniff<R: BufRead>(input: R) -> Result<Option<&'static Schema>> {
         for attr in e.attributes().with_checks(false) {
             let attr = attr?;
             let key = attr.key.as_ref();
-            if key == b"xmlns" || key.starts_with(b"xmlns:") {
-                iris.push(String::from_utf8_lossy(&attr.value).into_owned());
+            if key == "xmlns" || key.starts_with("xmlns:") {
+                iris.push(attr.value.into_owned());
             }
         }
         if let Some(schema) = Schema::detect(iris.iter().map(String::as_str)) {
@@ -344,18 +344,17 @@ impl<'a> Parser<'a> {
     }
 
     /// Expand an element QName to `(namespace IRI, local name)`, borrowing both.
-    fn expand<'q>(&self, qname: &'q [u8]) -> Option<(&str, &'q str)> {
-        let (prefix, local) = match qname.iter().position(|&b| b == b':') {
-            Some(i) => (&qname[..i], &qname[i + 1..]),
-            None => (&b""[..], qname),
+    fn expand<'q>(&self, qname: &'q str) -> Option<(&str, &'q str)> {
+        let (prefix, local) = match qname.split_once(':') {
+            Some((prefix, local)) => (prefix, local),
+            None => ("", qname),
         };
-        let ns = self.ns.get(prefix)?;
-        let local = std::str::from_utf8(local).ok()?;
+        let ns = self.ns.get(prefix.as_bytes())?;
         Some((ns.as_str(), local))
     }
 
-    fn resolve(&mut self, qname: &[u8]) -> Resolved {
-        if let Some(r) = self.cache.get(qname) {
+    fn resolve(&mut self, qname: &str) -> Resolved {
+        if let Some(r) = self.cache.get(qname.as_bytes()) {
             return *r;
         }
         let resolved = match self.expand(qname) {
@@ -370,7 +369,7 @@ impl<'a> Parser<'a> {
             },
             None => Resolved::Unknown,
         };
-        self.cache.insert(qname.to_vec(), resolved);
+        self.cache.insert(qname.as_bytes().to_vec(), resolved);
         resolved
     }
 
@@ -446,7 +445,7 @@ impl<'a> Parser<'a> {
                         // as the specification requires of every conforming parser. A
                         // value that must keep a literal CR is written as `&#13;`, which
                         // arrives as the reference event below rather than as text.
-                        let text = t.xml10_content().map_err(|e| Error::Xml(e.to_string()))?;
+                        let text = t.xml10_content();
                         p.text.push_str(&text);
                     }
                 }
@@ -464,12 +463,12 @@ impl<'a> Parser<'a> {
                             // IEC 61970-552 documents declare no DTD, so anything else is
                             // undefined and keeping its literal form loses least.
                             Ok(None) | Err(_) => {
-                                let name = r.decode().map_err(|e| Error::Xml(e.to_string()))?;
-                                match quick_xml::escape::resolve_predefined_entity(&name) {
+                                let name = r.as_ref();
+                                match quick_xml::escape::resolve_predefined_entity(name) {
                                     Some(text) => p.text.push_str(text),
                                     None => {
                                         p.text.push('&');
-                                        p.text.push_str(&name);
+                                        p.text.push_str(name);
                                         p.text.push(';');
                                     }
                                 }
@@ -480,7 +479,7 @@ impl<'a> Parser<'a> {
 
                 Event::CData(t) if ctx == Ctx::Text => {
                     if let Some(p) = st.pending.as_mut() {
-                        p.text.push_str(&String::from_utf8_lossy(&t));
+                        p.text.push_str(&t);
                     }
                 }
 
@@ -902,7 +901,7 @@ impl<'a> Parser<'a> {
             // defect in the document. The nested element is skipped with its content
             // rather than silently donating its text to the value around it.
             Ctx::Text => {
-                let name = String::from_utf8_lossy(qname).into_owned();
+                let name = qname.to_owned();
                 self.diag(
                     Diagnostic::warning(
                         Rule::Structure,
@@ -920,7 +919,7 @@ impl<'a> Parser<'a> {
     fn open_in_body(
         &mut self,
         e: &BytesStart<'_>,
-        qname: &[u8],
+        qname: &str,
         st: &mut State,
         pos: u64,
     ) -> Result<Ctx> {
@@ -995,7 +994,7 @@ impl<'a> Parser<'a> {
                 Ok(Ctx::Object)
             }
             Resolved::Attr(_) | Resolved::Unknown => {
-                let name = String::from_utf8_lossy(qname).into_owned();
+                let name = qname.to_owned();
                 if self.options.strictness == Strictness::Strict {
                     return Err(Error::NotCimXml(format!("unknown class element <{name}>")));
                 }
@@ -1015,7 +1014,7 @@ impl<'a> Parser<'a> {
     fn open_in_header(
         &mut self,
         e: &BytesStart<'_>,
-        qname: &[u8],
+        qname: &str,
         self_closing: bool,
         st: &mut State,
     ) -> Result<Ctx> {
@@ -1061,7 +1060,7 @@ impl<'a> Parser<'a> {
         let qname = e.name();
         let qname = qname.as_ref();
         let Resolved::Attr(attr) = self.resolve(qname) else {
-            let name = String::from_utf8_lossy(qname).into_owned();
+            let name = qname.to_owned();
             if self.options.strictness == Strictness::Strict {
                 return Err(Error::NotCimXml(format!(
                     "unknown property element <{name}>"
@@ -1161,8 +1160,22 @@ impl<'a> Parser<'a> {
             let Some(raw) = raw else { continue };
             let raw = raw.trim();
             let m = Mrid::parse(raw);
-            if self.options.report_non_conforming_mrids && !m.is_conforming() {
-                let complaint = if m.is_uuid() {
+            // `rdf:ID` is an XML `NCName`, which cannot begin with a digit — the whole
+            // reason 61970-552 writes an underscore before the UUID. A file omitting it is
+            // invalid RDF/XML, and parsing strips that decoration, so the value survives
+            // and nothing downstream can tell. Writing it back conforming is the only
+            // option (D18), which makes it a repair.
+            let unwritable_id = name == "rdf:ID" && !crate::xml::is_ncname(raw);
+            // The form report is opt-in, because published files deviate constantly and
+            // harmlessly. A repair is not that: the output differs from the input, so it is
+            // reported whether or not the caller asked about form (D56).
+            if unwritable_id || (self.options.report_non_conforming_mrids && !m.is_conforming()) {
+                let complaint = if unwritable_id {
+                    format!(
+                        "is not an XML NCName and so cannot be written back as one; repaired to {:?}",
+                        m.to_rdf_id()
+                    )
+                } else if m.is_uuid() {
                     // A UUID written without hyphens: the value is recoverable and the
                     // reference joins, so this is about the file's form, not its meaning.
                     format!(
@@ -1372,9 +1385,9 @@ impl<'a> Parser<'a> {
                 .normalized_value(quick_xml::XmlVersion::Explicit1_0)
                 .map_err(|e| Error::Xml(e.to_string()))?
                 .into_owned();
-            if let Some(prefix) = key.strip_prefix(b"xmlns:") {
-                self.ns.insert(prefix.to_vec(), value);
-            } else if key == b"xmlns" {
+            if let Some(prefix) = key.strip_prefix("xmlns:") {
+                self.ns.insert(prefix.as_bytes().to_vec(), value);
+            } else if key == "xmlns" {
                 self.ns.insert(Vec::new(), value);
             }
         }
@@ -1395,13 +1408,13 @@ impl<'a> Parser<'a> {
         for attr in e.attributes().with_checks(false) {
             let attr = attr?;
             let key = attr.key.as_ref();
-            let Some(i) = key.iter().position(|&b| b == b':') else {
+            let Some((prefix, name)) = key.split_once(':') else {
                 continue;
             };
-            if &key[i + 1..] != local.as_bytes() {
+            if name != local {
                 continue;
             }
-            if self.ns.get(&key[..i]).map(String::as_str) != Some(ns) {
+            if self.ns.get(prefix.as_bytes()).map(String::as_str) != Some(ns) {
                 continue;
             }
             return Ok(Some(
@@ -1415,13 +1428,13 @@ impl<'a> Parser<'a> {
 
 /// Whether an element carries an `xmlns` declaration, without parsing its attributes.
 fn declares_namespace(e: &BytesStart<'_>) -> bool {
-    e.as_ref().windows(5).any(|w| w == b"xmlns")
+    e.as_ref().contains("xmlns")
 }
 
 /// The prefix an element was written with, e.g. `md` for `md:Model.created`.
-fn prefix_of(qname: &[u8]) -> String {
-    match qname.iter().position(|&b| b == b':') {
-        Some(i) => String::from_utf8_lossy(&qname[..i]).into_owned(),
+fn prefix_of(qname: &str) -> String {
+    match qname.split_once(':') {
+        Some((prefix, _)) => prefix.to_owned(),
         None => String::new(),
     }
 }

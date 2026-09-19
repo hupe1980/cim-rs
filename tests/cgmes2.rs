@@ -17,7 +17,7 @@ use cim_rs::prelude::*;
 
 /// CGMES 2.4.15 conformity models ship as zip archives.
 fn cas2_archives(rel: &str) -> Option<Vec<PathBuf>> {
-    let dir = common::specs()?.join("test-models/cas-2.0").join(rel);
+    let dir = common::references()?.join("test-models/cas-2.0").join(rel);
     if !dir.is_dir() {
         return None;
     }
